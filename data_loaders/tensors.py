@@ -66,6 +66,10 @@ def collate(batch):
         hint = [b['hint']for b in notnone_batches]
         cond['y'].update({'hint': torch.as_tensor(hint)})
     
+    if 'goal_obj_pose' in notnone_batches[0] and notnone_batches[0]['hint'] is not None:
+        goal_obj_pose = [b['goal_obj_pose']for b in notnone_batches]
+        cond['y'].update({'goal_obj_pose': torch.as_tensor(goal_obj_pose)})
+    
     return motion, cond
 
 # an adapter to our collate func
@@ -76,6 +80,16 @@ def t2m_collate(batch):
         'tokens': b[6],
         'lengths': b[5],
         'hint': b[-1],
+    } for b in batch]
+    return collate(adapted_batch)
+
+def g2m_collate(batch):
+    adapted_batch = [{
+        'inp': torch.tensor(b[0].T).float().unsqueeze(1), # [seqlen, J] -> [J, 1, seqlen]
+        'hint': b[1],
+        'goal_obj_pose':b[2],
+        'lengths': b[-1],
+        'obj_points':b[3]
     } for b in batch]
     return collate(adapted_batch)
 
