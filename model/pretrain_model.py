@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 from torch.autograd import Variable
 from model.base_cross_model import PerceiveEncoder,PerceiveDecoder
-
+from .transformer import *
 
 class STN3d(nn.Module):
     def __init__(self, channel):
@@ -203,21 +203,35 @@ class gaze_obj_model(torch.nn.Module):
                                         n_self_att_layers=3,
                                         dropout=0.1)
 
-        self.gaze_decoder = PerceiveDecoder(n_query_channels=self.latent_dim,
-                n_query=345,
-                n_latent_channels=self.latent_dim,
-                dropout=0.1)
+        # self.gaze_decoder = PerceiveDecoder(n_query_channels=self.latent_dim,
+        #         n_query=345,
+        #         n_latent_channels=self.latent_dim,
+        #         dropout=0.1)
+        # self.gaze_decoder = PerceiveEncoder(n_input_channels=self.latent_dim,
+        #                                 n_latent=345,
+        #                                 n_latent_channels=self.latent_dim,
+        #                                 n_self_att_heads=2,
+        #                                 n_self_att_layers=1,
+        #                                 dropout=0.1)
         self.gaze_linear2 = nn.Sequential(
-                                nn.Linear(self.latent_dim, 32), nn.ELU(),
+                                nn.Linear(self.latent_dim, 64), nn.ELU(),
+                                nn.Linear(64,32), nn.ELU(),
                                 nn.Linear(32,3), nn.ELU()
                             )
 
-        self.obj_decoder = PerceiveDecoder(n_query_channels=self.latent_dim,
-                n_query=345,
-                n_latent_channels=self.latent_dim,
-                dropout=0.1)
+        # self.obj_decoder = PerceiveDecoder(n_query_channels=self.latent_dim,
+        #         n_query=345,
+        #         n_latent_channels=self.latent_dim,
+        #         dropout=0.1)
+        # self.obj_decoder = PerceiveEncoder(n_input_channels=self.latent_dim,
+        #                                 n_latent=345,
+        #                                 n_latent_channels=self.latent_dim,
+        #                                 n_self_att_heads=2,
+        #                                 n_self_att_layers=1,
+        #                                 dropout=0.1)
         self.obj_linear2 = nn.Sequential(
-                                nn.Linear(self.latent_dim, 32), nn.ELU(),
+                                nn.Linear(self.latent_dim, 64), nn.ELU(),
+                                nn.Linear(64,32), nn.ELU(),
                                 nn.Linear(32,9), nn.ELU()
                             )
     
@@ -229,21 +243,19 @@ class gaze_obj_model(torch.nn.Module):
      
         
         bs, nf, _ = y['gaze'].shape
-        obj_pose_emb = self.encode_obj_pose(init_obj_pose).unsqueeze(0)
         obj_mesh = y['obj_points']
-        # reshape(bs,-1,3).permute(0,2,1).contiguous()
 
         global_obj_feat,points_feat, _ ,_ = self.encode_obj_mesh(obj_mesh.permute(0,2,1).contiguous())
-        # print(global_obj_feat.shape)
-        obj_shape_emb += self.pointnet_emb(global_obj_feat).unsqueeze(0)
+        obj_shape_emb = self.pointnet_emb(global_obj_feat).unsqueeze(1)
             
-        gaze_emb = self.encode_gaze(self.gaze_linear(y['gaze'])).permute(1,0,2).contiguous()
-        obj_pose_emb = self.encode_obj(self.gaze_linear(y['obj_pose'])).permute(1,0,2).contiguous()
-        # print(x.shape, obj_pose_emb.shape, obj_shape_emb.shape, gaze_emb.shape)
-
+        gaze_emb = self.encode_gaze(self.gaze_linear(y['gaze']))
+        obj_pose_emb = self.encode_obj(self.obj_linear(y['obj_pose']))
+        # print(obj_pose_emb.shape, obj_shape_emb.shape)
         obj_emb =  obj_pose_emb + obj_shape_emb 
 
-        pre_gaze = self.gaze_linear2(self.gaze_decoder(obj_emb))
-        pre_obj = self.obj_linear2(self.obj_decoder(gaze_emb))
-        print(gaze_emb.shape,obj_emb.shape,pre_gaze.shape,pre_obj.shape)
+        pre_gaze = self.gaze_linear2(obj_emb)
+        pre_obj = self.obj_linear2(gaze_emb)
+        # pre_gaze = self.gaze_linear2(self.gaze_decoder(obj_emb))
+        # pre_obj = self.obj_linear2(self.obj_decoder(gaze_emb))
+        # print(gaze_emb.shape,obj_emb.shape,pre_gaze.shape,pre_obj.shape)
         return gaze_emb,obj_emb,pre_gaze,pre_obj

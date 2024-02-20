@@ -193,7 +193,7 @@ def g2m_stage0_collate(batch):
 def g2m_pretrain_collate(batch):
     # print(b[0])
     adapted_batch = [{
-        'inp': torch.tensor(b[0]).permute(1,0,2).contiguous().reshape(-1,36).T.float().unsqueeze(1), # [4,nf,9] -> [nf,4,9]
+        'inp': torch.tensor(b[0].T).float().unsqueeze(1), # [4,nf,9] -> [nf,4,9]
         'obj_pose':b[0],
         'gaze':b[1],
         'lengths': b[-2],

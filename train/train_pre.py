@@ -14,8 +14,8 @@ from model.pretrain_model import gaze_obj_model
 import torch
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.tensorboard import SummaryWriter
-
-
+from diffusion.nn import mean_flat, sum_flat
+import torch.nn.functional as F
 
 def masked_l2(a, b, mask):
     # assuming a.shape == b.shape == bs, J, Jdim, seqlen
@@ -107,12 +107,13 @@ def main():
     dist_util.setup_dist(args.device)
 
     print("creating data loader...")
-    data = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=args.num_frames,hint_type=args.hint_type)
-    model = gaze_obj_model(**get_model_args(args, data))
+    train_data = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=args.num_frames,hint_type=args.hint_type)
+    test_data = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=args.num_frames,hint_type=args.hint_type, split='test')
+    model = gaze_obj_model(**get_model_args(args, train_data))
     model.to(dist_util.dev())
     device = dist_util.dev()
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.000001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
     scheduler = StepLR(optimizer, step_size=300, gamma=0.1)
     print('Total params: %.2fM' % (sum(p.numel() for p in model.parameters()) / 1000000.0))
     print("Training...")
@@ -121,8 +122,9 @@ def main():
     writer = SummaryWriter(log_dir=args.save_dir)
     iter = 0
     for epoch in range(num_epoch):
-        print("EPOCH:",epoch)
-        for motion,cond in data:
+        # print("EPOCH:",epoch)
+        total_loss = 0
+        for motion,cond in train_data:
             motion = motion.to(device)
             cond['y'] = {key: val.to(device) if torch.is_tensor(val) else val for key, val in cond['y'].items()}
             mask = cond['y']['mask']
@@ -130,38 +132,70 @@ def main():
             obj_pose = cond['y']['obj_pose']
 
             gaze_emb,obj_emb,pre_gaze,pre_obj = model(motion,cond['y'])
-            
+            # print('mid value: ',gaze_emb.mean(),obj_emb.mean(),pre_gaze.mean(),pre_obj.mean())
             KLD = nn.KLDivLoss(reduction='batchmean')
-            kl_loss1 = KLD(gaze_emb, obj_emb)
-            kl_loss2 = KLD(obj_emb, gaze_emb)
+            # print(F.log_softmax(gaze_emb,dim=-1).shape, F.softmax(obj_emb,dim=-1).shape)
+            kl_loss1 = KLD(F.log_softmax(gaze_emb,dim=-1), F.softmax(obj_emb,dim=-1))
+            kl_loss2 = KLD(F.log_softmax(obj_emb,dim=-1), F.softmax(gaze_emb,dim=-1))
             kl_loss = (kl_loss1 + kl_loss2) / 2
 
-            gaze_rec_loss = masked_l2(gaze,pre_gaze,mask)
-            obj_rec_loss = masked_l2(obj_pose,pre_obj,mask)
+            gaze_rec_loss = masked_l2(gaze.permute(0,2,1).contiguous().unsqueeze(2),pre_gaze.permute(0,2,1).contiguous().unsqueeze(2),mask)
+            obj_rec_loss = masked_l2(obj_pose.permute(0,2,1).contiguous().unsqueeze(2),pre_obj.permute(0,2,1).contiguous().unsqueeze(2),mask)
 
+            # loss = (kl_loss ).mean()
             loss = (kl_loss + gaze_rec_loss + obj_rec_loss).mean()
-            print(loss)
-            # print(loss)
-            writer.add_scalar("toal loss",loss,iter)
+            # print(kl_loss.mean(),gaze_rec_loss.mean(),obj_rec_loss.mean())
+            # print(f"Epoch{epoch} -- TrainLoss",loss.item())
+            writer.add_scalar("toal train loss",loss,iter)
             writer.add_scalar("kl_loss",kl_loss.mean(),iter)
             writer.add_scalar("gaze_rec loss",gaze_rec_loss.mean(),iter)
             writer.add_scalar("obj rec loss",obj_rec_loss.mean(),iter)
             # writer.add_scalar("time_smooth",terms['time_smooth'].mean(),iter)
+            total_loss += loss
+            loss.backward()
+            optimizer.step()
+            iter = iter + 1
+        total_loss = total_loss / 10
+        print(f"Epoch{epoch} -- TrainLoss",total_loss.item())
+        best_loss = 400
+        if total_loss < 400:
+            for motion,cond in test_data:
+                print("in")
+                motion = motion.to(device)
+                cond['y'] = {key: val.to(device) if torch.is_tensor(val) else val for key, val in cond['y'].items()}
+                mask = cond['y']['mask']
+                gaze = cond['y']['gaze']
+                obj_pose = cond['y']['obj_pose']
 
+                gaze_emb,obj_emb,pre_gaze,pre_obj = model(motion,cond['y'])
+                KLD = nn.KLDivLoss(reduction='batchmean')
+                # print(F.log_softmax(gaze_emb,dim=-1).shape, F.softmax(obj_emb,dim=-1).shape)
+                kl_loss1 = KLD(F.log_softmax(gaze_emb,dim=-1), F.softmax(obj_emb,dim=-1))
+                kl_loss2 = KLD(F.log_softmax(obj_emb,dim=-1), F.softmax(gaze_emb,dim=-1))
+                kl_loss = (kl_loss1 + kl_loss2) / 2
+
+                gaze_rec_loss = masked_l2(gaze.permute(0,2,1).contiguous().unsqueeze(2),pre_gaze.permute(0,2,1).contiguous().unsqueeze(2),mask)
+                obj_rec_loss = masked_l2(obj_pose.permute(0,2,1).contiguous().unsqueeze(2),pre_obj.permute(0,2,1).contiguous().unsqueeze(2),mask)
+
+                # loss = (kl_loss ).mean()
+                loss = (kl_loss + gaze_rec_loss + obj_rec_loss).mean()
+                writer.add_scalar("toal test loss",loss,iter)
+                print(f"Epoch{epoch} -- TestLoss",loss.item())
             if loss < best_loss:
-                print("Epoch: ", epoch)
-                print('################## BEST PERFORMANCE {:0.2f} ########'.format(loss))
+            #     print("Epoch: ", epoch)
+            #     print('################## BEST PERFORMANCE {:0.2f} ########'.format(loss))
                 best_loss = loss
-                if best_loss < 0.5:
-                    save_path = os.path.join(args.save_dir, str(epoch).zfill(6)+'_model.pt')
+                if best_loss < 100:
+                    
+rt =                name = time.strftime("%Y%m%d%H%M%S%MS",time.localtime(time.time()))
+                    save_dir = os.path.join(args.save_dir,'model')
+                    save_path = os.path.join(args.save_dir, str(epoch).zfill(6)+f'_model_{best_loss}.pt')
                     torch.save({
                                 'model_state_dict': model.state_dict(),
                                 'optimizer_state_dict': optimizer.state_dict()
                                 }, save_path)
                     print("Saved model to:\n{}".format(save_path))
-            loss.backward()
-            optimizer.step()
-            iter = iter + 1
+            
 
 
 

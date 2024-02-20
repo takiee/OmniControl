@@ -369,6 +369,7 @@ class GazeHOIDataset_pretrain(data.Dataset):
     def __init__(self, mode='stage0', datapath='/root/code/seqs/gazehoi_list_train_new.txt', split='train',hint_type='goal_pose'):
         # super().__init__()
         if split == 'test':
+            print("Use Test DATA")
             datapath = '/root/code/seqs/gazehoi_list_test_new.txt'
         
         self.root = '/root/code/seqs/1205_data/'
@@ -402,28 +403,24 @@ class GazeHOIDataset_pretrain(data.Dataset):
         
         active_obj = meta['active_obj']
         obj_verts = np.load(join(self.obj_path,active_obj,'resampled_500_trans.npy'))
-        obj_pose = np.load(join(seq_path,obj+'_pose_trans.npy')).reshape(-1,3,4)
+        obj_pose = np.load(join(seq_path,active_obj+'_pose_trans.npy')).reshape(-1,3,4)
             
 
         length = 345
         if num_frames < length:
             # 在后边补充
             pad_width = ((0,length-num_frames), (0, 0))  # 在第一维度上填充0行，使总行数变为10
-            pad_obj_pose = np.pad(obj_pose.reshape(-1,12), pad_width, mode='edge').reshape(-1,3,4)
+            obj_pose = np.pad(obj_pose.reshape(-1,12), pad_width, mode='edge').reshape(-1,3,4)
 
             gaze = np.pad(gaze.reshape(-1,3), pad_width, mode='edge')
 
-        pad_obj_pose = torch.tensor(pad_obj_pose)
-        obj_pose_global_6d = obj_matrix2rot6d(obj_pose.unsqueeze(0)).squeeze(0).numpy()
+        pad_obj_pose = torch.tensor(obj_pose)
+        obj_pose_global_6d = obj_matrix2rot6d(pad_obj_pose.unsqueeze(0)).squeeze(0).numpy()
 
         obj_pose_global_6d = (obj_pose_global_6d - self.obj_global_mean) / self.obj_global_std
 
 
-        hint = np.zeros((length,36))
-        # (345, 3) (4, 345, 9) (4, 9) (4, 500, 3) 150 0677
-        # print(gaze.shape, local_obj_pose_6d.shape, global_initial_obj_pose_6d.shape, obj_verts.shape,num_frames,seq)
         return  obj_pose_global_6d, gaze, obj_verts,num_frames,seq
-        # return local_hand_pose_6d, hint, goal_obj_pose, obj_verts,length,seq
 
 
             
