@@ -16,10 +16,12 @@ from data_loaders.humanml.scripts.motion_process import recover_from_ric
 import data_loaders.humanml.utils.paramUtil as paramUtil
 from data_loaders.humanml.utils.plot_script import plot_3d_motion
 import shutil
-from data_loaders.tensors import collate
 from utils.text_control_example import collate_all
-from os.path import join as pjoin
-
+import pickle
+from manotorch.manolayer import ManoLayer
+from pytorch3d.transforms import rotation_6d_to_matrix,axis_angle_to_matrix,matrix_to_axis_angle
+from os.path import join
+from utils.data_util import rot6d2axis,axis2rot6d,local2global_axis_by_matrix,local2global_rot6d_by_matrix, obj_local2global_rot6d_by_matrix, obj_local2global_matrix
 
 def main():
     args = generate_args()
@@ -30,8 +32,19 @@ def main():
     max_frames = 196 if args.dataset in ['kit', 'humanml'] else 60
     fps = 12.5 if args.dataset == 'kit' else 20
     n_frames = min(max_frames, int(args.motion_length*fps))
-    n_frames = 196
-    is_using_data = not any([args.text_prompt])
+    # n_frames = 196
+    # n_frames = 60
+    if args.dataset == 'gazehoi_stage1':
+        n_frames = 60
+    elif args.dataset == 'gazehoi_stage2':
+        n_frames = 180
+    elif args.dataset == 'gazehoi_stage0':
+        n_frames = 354
+
+    is_using_data = True
+    # mean = np.load('dataset/gazehoi_mean.npy') 
+    # std = np.load('dataset/gazehoi_std.npy')
+    # is_using_data = not any([args.text_prompt])
     dist_util.setup_dist(args.device)
     if out_path == '':
         out_path = os.path.join(os.path.dirname(args.model_path),
@@ -40,23 +53,6 @@ def main():
             out_path += '_' + args.text_prompt.replace(' ', '_').replace('.', '')
 
     hints = None
-    # this block must be called BEFORE the dataset is loaded
-    if args.text_prompt != '':
-        if args.text_prompt == 'predefined':
-            # generate hint and text
-            texts, hints = collate_all(n_frames, args.dataset)
-            args.num_samples = len(texts)
-            if args.cond_mode == 'only_spatial':
-                # only with spatial control signal, and the spatial control signal is defined in utils/text_control_example.py
-                texts = ['' for i in texts]
-            elif args.cond_mode == 'only_text':
-                # only with text prompt, and the text prompt is defined in utils/text_control_example.py
-                hints = None
-        else:
-            # otherwise we use text_prompt
-            texts = [args.text_prompt]
-            args.num_samples = 1
-            hint = None
 
     assert args.num_samples <= args.batch_size, \
         f'Please either increase batch_size({args.batch_size}) or reduce num_samples({args.num_samples})'
@@ -85,14 +81,6 @@ def main():
     if is_using_data:
         iterator = iter(data)
         _, model_kwargs = next(iterator)
-    else:
-        collate_args = [{'inp': torch.zeros(n_frames), 'tokens': None, 'lengths': n_frames}] * args.num_samples
-        # t2m
-        collate_args = [dict(arg, text=txt) for arg, txt in zip(collate_args, texts)]
-        if hints is not None:
-            collate_args = [dict(arg, hint=hint) for arg, hint in zip(collate_args, hints)]
-
-        _, model_kwargs = collate(collate_args)
 
     for k, v in model_kwargs['y'].items():
         if torch.is_tensor(v):
@@ -103,6 +91,7 @@ def main():
     all_text = []
     all_hint = []
     all_hint_for_vis = []
+    all_seqs = []
 
     for rep_i in range(args.num_repetitions):
         print(f'### Sampling [repetitions #{rep_i}]')
@@ -112,7 +101,7 @@ def main():
             model_kwargs['y']['scale'] = torch.ones(args.batch_size, device=dist_util.dev()) * args.guidance_param
 
         sample_fn = diffusion.p_sample_loop
-
+        # print(args.batch_size, model.njoints, model.nfeats, n_frames)
         sample = sample_fn(
             model,
             (args.batch_size, model.njoints, model.nfeats, n_frames),
@@ -125,46 +114,39 @@ def main():
             noise=None,
             const_noise=False,
         )
+        sample = sample.permute(0, 3, 2, 1).squeeze(2).contiguous().cpu()
+        if args.dataset != 'gazehoi_stage0':
+          
+            global_mean = torch.from_numpy(np.load('dataset/gazehoi_global_motion_6d_mean.npy'))
+            global_std = torch.from_numpy(np.load('dataset/gazehoi_global_motion_6d_std.npy'))
+            local_mean = torch.from_numpy(np.load('dataset/gazehoi_local_motion_6d_mean.npy'))
+            local_std = torch.from_numpy(np.load('dataset/gazehoi_local_motion_6d_std.npy'))
 
-        sample = sample[:, :263]
-        # Recover XYZ *positions* from HumanML3D vector representation
-        if model.data_rep == 'hml_vec':
-            n_joints = 22 if sample.shape[1] == 263 else 21
-            sample = data.dataset.t2m_dataset.inv_transform(sample.cpu().permute(0, 2, 3, 1)).float()
-            sample = recover_from_ric(sample, n_joints)
-            sample = sample.view(-1, *sample.shape[2:]).permute(0, 2, 3, 1)
-
-        rot2xyz_pose_rep = 'xyz' if model.data_rep in ['xyz', 'hml_vec'] else model.data_rep
-        rot2xyz_mask = None if rot2xyz_pose_rep == 'xyz' else model_kwargs['y']['mask'].reshape(args.batch_size, n_frames).bool()
-        sample = model.rot2xyz(x=sample, mask=rot2xyz_mask, pose_rep=rot2xyz_pose_rep, glob=True, translation=True,
-                               jointstype='smpl', vertstrans=True, betas=None, beta=0, glob_rot=None,
-                               get_rotations_back=False)
-
-        if args.unconstrained:
-            all_text += ['unconstrained'] * args.num_samples
+            
+            sample = sample * local_std + local_mean 
+            sample = local2global_rot6d_by_matrix(sample)
+            sample = rot6d2axis(sample)
+            # 转为绝对表示
+            # sample = torch.cumsum(sample_r,dim=1)
+            # sample[:,:,9:] = sample_r[:,:,9:]
+            # # rot6d 转为 轴角
+            # sample_axis = matrix_to_axis_angle(rotation_6d_to_matrix(sample[:,:,3:].reshape(81,-1,16,6))).reshape(81,-1,48)
+            # sample = torch.cat([sample[:,:,:3],sample_axis],dim=-1)
+            if args.dataset == 'gazehoi_stage1':
+                hint = model_kwargs['y']['hint'].cpu()
+                hint = hint * global_std + global_mean
+                hint = rot6d2axis(hint)
+                all_hint.append(hint.data.cpu().numpy())  
         else:
-            text_key = 'text' if 'text' in model_kwargs['y'] else 'action_text'
-            all_text += model_kwargs['y'][text_key]
+            obj_global_mean = torch.from_numpy(np.load('dataset/gazehoi_global_obj_mean.npy')).reshape(1,-1).repeat(4,1).reshape(1,-1)
+            obj_global_std = torch.from_numpy(np.load('dataset/gazehoi_global_obj_std.npy')).reshape(1,-1).repeat(4,1).reshape(1,-1)
+            obj_local_mean = torch.from_numpy(np.load('dataset/gazehoi_local_obj_mean.npy')).reshape(1,-1).repeat(4,1).reshape(1,-1)
+            obj_local_std = torch.from_numpy(np.load('dataset/gazehoi_local_obj_std.npy')).reshape(1,-1).repeat(4,1).reshape(1,-1)
+            sample = sample * obj_local_std + obj_local_mean  # bs, nf, 36
 
-            if 'hint' in model_kwargs['y']:
-                hint = model_kwargs['y']['hint']
-                # denormalize hint
-                if args.dataset == 'humanml':
-                    spatial_norm_path = './dataset/humanml_spatial_norm'
-                elif args.dataset == 'kit':
-                    spatial_norm_path = './dataset/kit_spatial_norm'
-                else:
-                    raise NotImplementedError('unknown dataset')
-                raw_mean = torch.from_numpy(np.load(pjoin(spatial_norm_path, 'Mean_raw.npy'))).cuda()
-                raw_std = torch.from_numpy(np.load(pjoin(spatial_norm_path, 'Std_raw.npy'))).cuda()
-                mask = hint.view(hint.shape[0], hint.shape[1], n_joints, 3).sum(-1) != 0
-                hint = hint * raw_std + raw_mean
-                hint = hint.view(hint.shape[0], hint.shape[1], n_joints, 3) * mask.unsqueeze(-1)
-                hint = hint.view(hint.shape[0], hint.shape[1], -1)
-                # ---
-                all_hint.append(hint.data.cpu().numpy())
-                hint = hint.view(hint.shape[0], hint.shape[1], n_joints, 3)
-                all_hint_for_vis.append(hint.data.cpu().numpy())
+            sample = obj_local2global_matrix(sample)
+
+        all_seqs.append(model_kwargs['y']['seq_name'])
 
         all_motions.append(sample.cpu().numpy())
         all_lengths.append(model_kwargs['y']['lengths'].cpu().numpy())
@@ -173,116 +155,169 @@ def main():
 
 
     all_motions = np.concatenate(all_motions, axis=0)
+    print(total_num_samples)
     all_motions = all_motions[:total_num_samples]  # [bs, njoints, 6, seqlen]
-    all_text = all_text[:total_num_samples]
-    all_lengths = np.concatenate(all_lengths, axis=0)[:total_num_samples]
-    if 'hint' in model_kwargs['y']:
+    all_seqs =  [element for sublist in all_seqs for element in sublist]
+    # all_text = all_text[:total_num_samples]
+    # all_lengths = np.concatenate(all_lengths, axis=0)[:total_num_samples]
+    if args.dataset == 'gazehoi_stage1':
         all_hint = np.concatenate(all_hint, axis=0)[:total_num_samples]
-        all_hint_for_vis = np.concatenate(all_hint_for_vis, axis=0)[:total_num_samples]
+        # all_hint_for_vis = np.concatenate(all_hint_for_vis, axis=0)[:total_num_samples]
     
-    if len(all_hint) != 0:
-        from utils.simple_eval import simple_eval
-        results = simple_eval(all_motions, all_hint, n_joints)
-        print(results)
-
+    # all_motions = all_motions * std + mean
+    # all_hint = all_hint * std + mean
     if os.path.exists(out_path):
         shutil.rmtree(out_path)
     os.makedirs(out_path)
 
     npy_path = os.path.join(out_path, 'results.npy')
     print(f"saving results file to [{npy_path}]")
-    np.save(npy_path,
-            {'motion': all_motions, 'text': all_text, 'lengths': all_lengths, "hint": all_hint_for_vis,
-             'num_samples': args.num_samples, 'num_repetitions': args.num_repetitions})
-    with open(npy_path.replace('.npy', '.txt'), 'w') as fw:
-        fw.write('\n'.join(all_text))
-    with open(npy_path.replace('.npy', '_len.txt'), 'w') as fw:
-        fw.write('\n'.join([str(l) for l in all_lengths]))
-
-    print(f"saving visualizations to [{out_path}]...")
-    skeleton = paramUtil.kit_kinematic_chain if args.dataset == 'kit' else paramUtil.t2m_kinematic_chain
-
-    sample_files = []
-    num_samples_in_out_file = 7
-
-    sample_print_template, row_print_template, all_print_template, \
-    sample_file_template, row_file_template, all_file_template = construct_template_variables(args.unconstrained)
-
-    for sample_i in range(args.num_samples):
-        rep_files = []
-        for rep_i in range(args.num_repetitions):
-            caption = all_text[rep_i*args.batch_size + sample_i]
-            length = all_lengths[rep_i*args.batch_size + sample_i]
-            motion = all_motions[rep_i*args.batch_size + sample_i].transpose(2, 0, 1)[:length]
-            if 'hint' in model_kwargs['y']:
-                hint = all_hint_for_vis[rep_i*args.batch_size + sample_i]
-            else:
-                hint = None
-            save_file = sample_file_template.format(sample_i, rep_i)
-            print(sample_print_template.format(caption, sample_i, rep_i, save_file))
-            animation_save_path = os.path.join(out_path, save_file)
-            plot_3d_motion(animation_save_path, skeleton, motion, dataset=args.dataset, title=caption, fps=fps, hint=hint)
-            # Credit for visualization: https://github.com/EricGuo5513/text-to-motion
-            rep_files.append(animation_save_path)
-
-        sample_files = save_multiple_samples(args, out_path,
-                                               row_print_template, all_print_template, row_file_template, all_file_template,
-                                               caption, num_samples_in_out_file, rep_files, sample_files, sample_i)
+    if args.dataset == 'gazehoi_stage1':
+        np.save(npy_path,
+                {'motion': all_motions, 'lengths': all_lengths, "hint": all_hint, 'seqs':all_seqs,
+                'num_samples': args.num_samples, 'num_repetitions': args.num_repetitions})
+    elif args.dataset == 'gazehoi_stage2' or args.dataset == 'gazehoi_stage0':
+        np.save(npy_path,
+                {'motion': all_motions, 'lengths': all_lengths, 'seqs':all_seqs,
+                'num_samples': args.num_samples, 'num_repetitions': args.num_repetitions})
+        
+    # if len(all_hint) != 0:
+    #     from utils.simple_eval import simple_eval
+    #     results = simple_eval(all_motions, all_hint, n_joints)
+    #     print(results)
+    res_save_path = join(out_path, 'eval_results.txt')
+    all_motions = torch.tensor(all_motions)
+    all_hint = torch.tensor(all_hint)
+    stage1_eval(all_motions, all_hint, all_seqs, res_save_path)
+    # vis_gen(all_motions,all_seqs,res_save_path,vis_num)
 
     abs_path = os.path.abspath(out_path)
     print(f'[Done] Results are at [{abs_path}]')
 
+def cal_goal_err(x, hint):
+    """
+    每个joints的平均偏差?
+    """
+    mask_hint = hint.view(hint.shape[0], hint.shape[1], -1).sum(dim=-1, keepdim=True) != 0
+    x_ = x
+    bs,nf,_ = x_.shape
+    loss = torch.norm((x_.reshape(bs,nf,-1) - hint.reshape(bs,nf,-1)) * mask_hint, dim=-1)
+    # print(loss[:,0])
+    # loss = loss[:,0] # bs,17
+    # loss = torch.sum(loss) / bs
+    loss = torch.mean(loss)
+    return loss
 
-def save_multiple_samples(args, out_path, row_print_template, all_print_template, row_file_template, all_file_template,
-                          caption, num_samples_in_out_file, rep_files, sample_files, sample_i):
-    all_rep_save_file = row_file_template.format(sample_i)
-    all_rep_save_path = os.path.join(out_path, all_rep_save_file)
-    ffmpeg_rep_files = [f' -i {f} ' for f in rep_files]
-    hstack_args = f' -filter_complex hstack=inputs={args.num_repetitions}' if args.num_repetitions > 1 else ''
-    ffmpeg_rep_cmd = f'ffmpeg -y -loglevel warning ' + ''.join(ffmpeg_rep_files) + f'{hstack_args} {all_rep_save_path}'
-    os.system(ffmpeg_rep_cmd)
-    print(row_print_template.format(caption, sample_i, all_rep_save_file))
-    sample_files.append(all_rep_save_path)
-    if (sample_i + 1) % num_samples_in_out_file == 0 or sample_i + 1 == args.num_samples:
-        # all_sample_save_file =  f'samples_{(sample_i - len(sample_files) + 1):02d}_to_{sample_i:02d}.mp4'
-        all_sample_save_file = all_file_template.format(sample_i - len(sample_files) + 1, sample_i)
-        all_sample_save_path = os.path.join(out_path, all_sample_save_file)
-        print(all_print_template.format(sample_i - len(sample_files) + 1, sample_i, all_sample_save_file))
-        ffmpeg_rep_files = [f' -i {f} ' for f in sample_files]
-        vstack_args = f' -filter_complex vstack=inputs={len(sample_files)}' if len(sample_files) > 1 else ''
-        ffmpeg_rep_cmd = f'ffmpeg -y -loglevel warning ' + ''.join(
-            ffmpeg_rep_files) + f'{vstack_args} {all_sample_save_path}'
-        os.system(ffmpeg_rep_cmd)
-        sample_files = []
-    return sample_files
+def stage1_eval(pred_motion, all_hint, all_seqs, res_save_path):
+    pred_motion = pred_motion
+    hint = all_hint
+    goal_err = cal_goal_err(pred_motion,hint)
+
+    num_samples = pred_motion.shape[0]
 
 
-def construct_template_variables(unconstrained):
-    row_file_template = 'sample{:02d}.mp4'
-    all_file_template = 'samples_{:02d}_to_{:02d}.mp4'
-    if unconstrained:
-        sample_file_template = 'row{:02d}_col{:02d}.mp4'
-        sample_print_template = '[{} row #{:02d} column #{:02d} | -> {}]'
-        row_file_template = row_file_template.replace('sample', 'row')
-        row_print_template = '[{} row #{:02d} | all columns | -> {}]'
-        all_file_template = all_file_template.replace('samples', 'rows')
-        all_print_template = '[rows {:02d} to {:02d} | -> {}]'
-    else:
-        sample_file_template = 'sample{:02d}_rep{:02d}.mp4'
-        sample_print_template = '["{}" ({:02d}) | Rep #{:02d} | -> {}]'
-        row_print_template = '[ "{}" ({:02d}) | all repetitions | -> {}]'
-        all_print_template = '[samples {:02d} to {:02d} | all repetitions | -> {}]'
+    datapath = '/root/code/seqs/1205_data/'
+    manolayer = ManoLayer(mano_assets_root='/root/code/CAMS/data/mano_assets/mano',side='right')
+    obj_path = '/root/code/seqs/object/'
 
-    return sample_print_template, row_print_template, all_print_template, \
-           sample_file_template, row_file_template, all_file_template
+    total_hand_T_error = 0
+    total_hand_R_error = 0
+    total_mpjpe = 0 # root-relative
+    total_traj_invalid_10 = 0
+    total_traj_invalid_20 = 0
+    total_traj_num = 0
+    total_hand_R_error = 0
+
+    for i in range(pred_motion.shape[0]):
+        seq = all_seqs[i]
+        seq_path = join(datapath,seq)
+
+        meta_path = join(seq_path,'meta.pkl')
+        with open(meta_path,'rb')as f:
+            meta = pickle.load(f)
+            
+        active_obj = meta['active_obj']
+        obj_pose = np.load(join(seq_path,active_obj+'_pose_trans.npy'))
+        
+        goal_index = meta['goal_index']
+        obj_pose = torch.tensor(obj_pose[:goal_index+1]).float()
+
+        if goal_index < 59:
+            hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[:goal_index+1]
+        else:
+            hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[goal_index-59:goal_index+1]
+
+        hand_trans = hand_params[:,:3]
+        hand_rot = hand_params[:,3:6]
+        hand_theta = hand_params[:,3:51]
+        mano_beta = hand_params[:,51:]
+
+        ## 倒序
+        # pred_trans = torch.flip(pred_motion[i,:goal_index+1,:3],dims=[0])
+        # pred_theta = torch.flip(pred_motion[i,:goal_index+1,3:],dims=[0])
+        # pred_rot = torch.flip(pred_motion[i,:goal_index+1,3:6],dims=[0])
+
+        ## 正序
+        if goal_index < 59:
+            pred_trans = pred_motion[i,59-goal_index:,:3]
+            pred_theta = pred_motion[i,59-goal_index:,3:]
+            pred_rot = pred_motion[i,59-goal_index:,3:6]
+        else:
+            pred_trans = pred_motion[i,:,:3]
+            pred_theta = pred_motion[i,:,3:]
+            pred_rot = pred_motion[i,:,3:6]
+
+        # print(goal_index,pred_theta.shape, mano_beta.shape)
+        pred_output = manolayer(pred_theta, mano_beta)
+        # 相对表示
+        pred_joints = pred_output.joints - pred_output.joints[:, 0].unsqueeze(1)
+        gt_output = manolayer(hand_theta, mano_beta)
+        # 相对表示
+        gt_joints = gt_output.joints - gt_output.joints[:, 0].unsqueeze(1)
+        mpjpe = torch.sum(torch.norm(pred_joints - gt_joints, dim=-1)) / (hand_trans.shape[0] * 21)
+        total_mpjpe += mpjpe
+
+        hand_T_error = torch.sum(torch.norm(hand_trans-pred_trans,p=2,dim=-1)) / hand_trans.shape[0]
+        total_hand_T_error += hand_T_error
+
+        hand_rot = axis_angle_to_matrix(hand_rot)
+        pred_rot = axis_angle_to_matrix(pred_rot)
+        hand_rot = torch.einsum('...ij->...ji', [hand_rot])
+        hand_R_error = (torch.einsum('fpn,fnk->fpk',hand_rot,pred_rot) - torch.eye(3).unsqueeze(0).repeat(hand_rot.shape[0],1,1)).reshape(-1,9) # nf,3,3
+        hand_R_error =  torch.sum(torch.norm(hand_R_error,dim=-1)) /hand_trans.shape[0]
+        total_hand_R_error += hand_R_error
+
+        traj_error = torch.norm(hand_trans-pred_trans,p=2,dim=1) 
+        traj_invalid_10 = torch.sum(traj_error > 0.1)
+        traj_invalid_20 = torch.sum(traj_error > 0.2)
+        total_traj_invalid_10 += traj_invalid_10
+        total_traj_invalid_20 += traj_invalid_20
+        total_traj_num += traj_error.shape[0]
+    
+    goal_err = goal_err.numpy()
+    traj_err_10 = (total_traj_invalid_10/total_traj_num).numpy()
+    traj_err_20 = (total_traj_invalid_20/total_traj_num).numpy()
+    hand_T_err = (total_hand_T_error/num_samples).numpy()
+    hand_R_err = (total_hand_R_error/num_samples).numpy()
+    mpjpe = (total_mpjpe/num_samples).numpy()
+    with open(res_save_path, 'w') as f:
+        f.write(f'Goal Error:{goal_err:.6f}\n')
+        f.write(f'Traj Error (<10cm):{traj_err_10:.6f}\n')
+        f.write(f'Traj Error (<20cm):{traj_err_20:.6f}\n')
+        f.write(f'Hand Trans Error:{hand_T_err:.6f}\n')
+        f.write(f'Hand Rot Error:{hand_R_err:.6f}\n')
+        f.write(f'MPJPE :{mpjpe:.6f}\n')
+
+
 
 
 def load_dataset(args, max_frames, n_frames):
+    print(args.dataset)
     data = get_dataset_loader(name=args.dataset,
                               batch_size=args.batch_size,
                               num_frames=max_frames,
                               split='test',
-                              hml_mode='train')
+                              hml_mode='train',hint_type=args.hint_type)
     if args.dataset in ['kit', 'humanml']:
         data.dataset.t2m_dataset.fixed_length = n_frames
     return data

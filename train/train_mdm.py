@@ -4,6 +4,8 @@ Train a diffusion model on images.
 """
 
 import os
+import sys
+
 import json
 from utils.fixseed import fixseed
 from utils.parser_util import train_args
@@ -34,12 +36,19 @@ def main():
     dist_util.setup_dist(args.device)
 
     print("creating data loader...")
-    data = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=args.num_frames)
+    data = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=args.num_frames,hint_type=args.hint_type)
+
+    # for motion, cond in data:
+    #     print(motion.shape)
+    #     print(cond['y']['hint'].shape)
+    #     break
+
+
 
     print("creating model and diffusion...")
     model, diffusion = create_model_and_diffusion(args, data)
     model.to(dist_util.dev())
-    model.rot2xyz.smpl_model.eval()
+    # model.rot2xyz.smpl_model.eval()
 
     print('Total params: %.2fM' % (sum(p.numel() for p in model.parameters_wo_clip()) / 1000000.0))
     print("Training...")

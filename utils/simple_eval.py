@@ -10,7 +10,8 @@ def simple_eval(motion, hint, n_joints=22):
     # hint = hint * raw_std + raw_mean
     # hint = hint * mask
     hint = hint.transpose((0, 2, 1))
-    hint = hint.reshape(hint.shape[0], n_joints, 3, -1)
+    print(hint.shape)
+    # hint = hint.reshape(hint.shape[0], , -1)
     mask = hint.sum(axis=2, keepdims=True) != 0
     loss = np.linalg.norm((motion - hint) * mask, axis=2)
     loss = loss.sum() / mask.sum()

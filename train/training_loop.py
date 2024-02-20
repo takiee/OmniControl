@@ -159,14 +159,33 @@ class TrainLoop:
             last_batch = (i + self.microbatch) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
 
-            compute_losses = functools.partial(
-                self.diffusion.training_losses,
-                self.ddp_model,
-                micro,  # [bs, ch, image_size, image_size]
-                t,  # [bs](int) sampled timesteps
-                model_kwargs=micro_cond,
-                dataset=self.data.dataset
-            )
+            if self.dataset == 'gazehoi_stage1':
+                compute_losses = functools.partial(
+                    self.diffusion.training_losses_stage1,
+                    self.ddp_model,
+                    micro,  # [bs, ch, image_size, image_size]
+                    t,  # [bs](int) sampled timesteps
+                    model_kwargs=micro_cond,
+                    dataset=self.data.dataset
+                )
+            elif self.dataset == 'gazehoi_stage2':
+                compute_losses = functools.partial(
+                    self.diffusion.training_losses_stage2,
+                    self.ddp_model,
+                    micro,  # [bs, ch, image_size, image_size]
+                    t,  # [bs](int) sampled timesteps
+                    model_kwargs=micro_cond,
+                    dataset=self.data.dataset
+                )
+            elif self.dataset == 'gazehoi_stage0':
+                compute_losses = functools.partial(
+                    self.diffusion.training_losses_stage0,
+                    self.ddp_model,
+                    micro,  # [bs, ch, image_size, image_size]
+                    t,  # [bs](int) sampled timesteps
+                    model_kwargs=micro_cond,
+                    dataset=self.data.dataset
+                )
 
             if last_batch or not self.use_ddp:
                 losses = compute_losses()

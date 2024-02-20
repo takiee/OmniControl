@@ -139,3 +139,6 @@ hint.npy
 t2m
 submit.sh
 scripts_/
+
+save
+data_valid

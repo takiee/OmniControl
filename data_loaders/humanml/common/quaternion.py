@@ -42,7 +42,8 @@ def qmul(q, r):
     original_shape = q.shape
 
     # Compute outer product
-    terms = torch.bmm(r.view(-1, 4, 1), q.view(-1, 1, 4))
+    # terms = torch.bmm(r.view(-1, 4, 1), q.view(-1, 1, 4))
+    terms = torch.bmm(r.reshape(-1, 4, 1), q.reshape(-1, 1, 4))
 
     w = terms[:, 0, 0] - terms[:, 1, 1] - terms[:, 2, 2] - terms[:, 3, 3]
     x = terms[:, 0, 1] + terms[:, 1, 0] - terms[:, 2, 3] + terms[:, 3, 2]
