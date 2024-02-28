@@ -102,7 +102,7 @@ def add_model_options(parser):
 
 def add_data_options(parser):
     group = parser.add_argument_group('dataset')
-    group.add_argument("--dataset", default='gazehoi_stage1', choices=['gazehoi_pretrain','gazehoi_stage0','gazehoi_stage1', 'gazehoi_stage2'], type=str,
+    group.add_argument("--dataset", default='gazehoi_stage1', choices=['gazehoi_pretrain','gazehoi_stage0','gazehoi_stage0_1','gazehoi_stage0_1obj','gazehoi_stage0_flag','gazehoi_stage0_flag2','gazehoi_stage0_flag2_lowfps','gazehoi_stage0_flag2_lowfps_global','gazehoi_stage1','gazehoi_stage1_new', 'gazehoi_stage2'], type=str,
                        help="Dataset name (choose from list).")
     group.add_argument("--hint_type", default='root_dis', choices=['goal_pose', 'root_dis', 'tip_dis', 'tips_closest_point','hand_T','init_pose'], type=str)
     group.add_argument("--data_dir", default="", type=str,
@@ -133,7 +133,7 @@ def add_training_options(parser):
                        help="Number of repetitions for evaluation loop during training.")
     group.add_argument("--eval_num_samples", default=1_000, type=int,
                        help="If -1, will use all samples in the specified split.")
-    group.add_argument("--log_interval", default=1_000, type=int,
+    group.add_argument("--log_interval", default=5000, type=int,
                        help="Log losses each N steps")
     group.add_argument("--save_interval", default=10_000, type=int,
                        help="Save checkpoints and run evaluation each N steps")

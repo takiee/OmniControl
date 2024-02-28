@@ -41,12 +41,15 @@ def get_model_args(args, data):
         data_rep = 'hml_vec'
         njoints = 251
         nfeats = 1
-    elif args.dataset == 'gazehoi_stage1' or args.dataset == 'gazehoi_stage2':
+    # elif args.dataset == 'gazehoi_stage1' or args.dataset == 'gazehoi_stage2' :
+    elif args.dataset == 'gazehoi_stage1' or args.dataset == 'gazehoi_stage2' or args.dataset == 'gazehoi_stage1_new':
         # print('gazehoi!!')
         data_rep = 'rot6d'
         # njoints = 51
         njoints = 99
         nfeats = 1
+        length = 60
+        hint_dim = 99
         if args.hint_type == 'root_dis':
             hint_dim = 1
         elif args.hint_type == 'tip_dis':
@@ -57,22 +60,61 @@ def get_model_args(args, data):
             hint_dim = 20
         elif args.hint_type == 'hand_T':
             hint_dim = 3
-    elif args.dataset == 'gazehoi_stage0':
+    elif args.dataset == 'gazehoi_stage1_new_':
+        # print('gazehoi!!')
+        data_rep = 'rot6d'
+        # njoints = 51
+        njoints = 99
+        nfeats = 1
+        length = 60
+        hint_dim = 63
+    elif args.dataset == 'gazehoi_stage0' or args.dataset == 'gazehoi_stage0_flag' or args.dataset == 'gazehoi_stage0_flag2':
         # print('gazehoi!!')
         data_rep = 'rot6d'
         # njoints = 51
         njoints = 36
         nfeats = 1
         args.latent_dim = 128
+        length = 345
         if args.hint_type == 'init_pose':
             hint_dim = 36 # 4*9
+    elif args.dataset == 'gazehoi_stage0_flag2_lowfps' or args.dataset == 'gazehoi_stage0_flag2_lowfps_global':
+        # print('gazehoi!!')
+        data_rep = 'rot6d'
+        # njoints = 51
+        njoints = 36
+        nfeats = 1
+        args.latent_dim = 128
+        length = 69
+        if args.hint_type == 'init_pose':
+            hint_dim = 36 # 4*9
+    elif args.dataset == 'gazehoi_stage0_1obj':
+        # print('gazehoi!!')
+        data_rep = 'rot6d'
+        # njoints = 51
+        njoints = 9
+        nfeats = 1
+        args.latent_dim = 128
+        length = 69
+        if args.hint_type == 'init_pose':
+            hint_dim = 9 # 4*9
+    elif args.dataset == 'gazehoi_stage0_1' :
+        # print('gazehoi!!')
+        data_rep = 'rot6d'
+        # njoints = 51
+        njoints = 9
+        nfeats = 1
+        length = 345
+        args.latent_dim = 128
+        if args.hint_type == 'init_pose':
+            hint_dim = 9 # 4*9
 
     return {'modeltype': '', 'njoints': njoints, 'nfeats': nfeats, 'num_actions': num_actions,
             'translation': True, 'pose_rep': 'rot6d', 'glob': True, 'glob_rot': True,
             'latent_dim': args.latent_dim, 'ff_size': 1024, 'num_layers': args.layers, 'num_heads': 4,
             'dropout': 0.1, 'activation': "gelu", 'data_rep': data_rep, 'cond_mode': args.cond_mode,
             'cond_mask_prob': args.cond_mask_prob, 'action_emb': action_emb, 'arch': args.arch,
-            'emb_trans_dec': args.emb_trans_dec, 'clip_version': clip_version, 'dataset': args.dataset,'hint_dim':hint_dim}
+            'emb_trans_dec': args.emb_trans_dec, 'clip_version': clip_version, 'dataset': args.dataset,'hint_dim':hint_dim,'length':length}
 
 
 def create_gaussian_diffusion(args):

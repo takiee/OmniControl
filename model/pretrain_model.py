@@ -195,7 +195,7 @@ class gaze_obj_model(torch.nn.Module):
                                         n_self_att_heads=4,
                                         n_self_att_layers=3,
                                         dropout=0.1)
-        self.obj_linear = nn.Linear(9, 16)  
+        self.obj_linear = nn.Linear(3, 16)  
         self.encode_obj = PerceiveEncoder(n_input_channels=16,
                                         n_latent=345,
                                         n_latent_channels=self.latent_dim,
@@ -232,7 +232,7 @@ class gaze_obj_model(torch.nn.Module):
         self.obj_linear2 = nn.Sequential(
                                 nn.Linear(self.latent_dim, 64), nn.ELU(),
                                 nn.Linear(64,32), nn.ELU(),
-                                nn.Linear(32,9), nn.ELU()
+                                nn.Linear(32,3), nn.ELU()
                             )
     
     def forward(self, motion,y=None, control=None):

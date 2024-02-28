@@ -7,6 +7,8 @@ from model.rotation2xyz import Rotation2xyz
 from .transformer import *
 from torch.autograd import Variable
 from model.base_cross_model import PerceiveEncoder
+from model.base_cross_model import *
+from model.pointnet_plus2 import *
 
 
 class STN3d(nn.Module):
@@ -149,10 +151,11 @@ class CMDM(torch.nn.Module):
     def __init__(self, modeltype, njoints, nfeats, num_actions, translation, pose_rep, glob, glob_rot,
                  latent_dim=256, ff_size=1024, num_layers=8, num_heads=4, dropout=0.1,
                  ablation=None, activation="gelu", legacy=False, data_rep='rot6d', dataset='amass', clip_dim=512,
-                 arch='trans_enc', emb_trans_dec=False, clip_version=None,hint_dim=99,*args, **kargs):
+                 arch='trans_enc', emb_trans_dec=False, clip_version=None,hint_dim=99,length=None,*args, **kargs):
         super().__init__()
 
         self.hint_dim = hint_dim
+        self.length = length
 
         self.legacy = legacy
         self.modeltype = modeltype
@@ -224,14 +227,15 @@ class CMDM(torch.nn.Module):
         # if self.dataset == 'gazehoi_stage1':
         #     self.input_hint_block = HintBlock(self.data_rep, 99, self.latent_dim)
         # elif self.dataset == 'gazehoi_stage2':
-        self.input_hint_block = HintBlock(self.data_rep, self.hint_dim, self.latent_dim)
-        if self.hint_dim != 99 and self.dataset != 'gazehoi_stage0':
-            # print("wrong")
-            self.encode_obj_pose = nn.Linear(12,self.latent_dim)
-            self.encode_obj_mesh = PointNetEncoder(global_feat=False, feature_transform=True, channel=3)
-            self.pointnet_emb = nn.Linear(1024,self.latent_dim)
-        elif self.hint_dim == 36 and self.dataset == 'gazehoi_stage0':
+        
+        # if self.hint_dim != 99 and not (self.dataset.startswith('gazehoi_stage0')):
+        #     # print("wrong")
+        #     self.encode_obj_pose = nn.Linear(12,self.latent_dim)
+        #     self.encode_obj_mesh = PointNetEncoder(global_feat=False, feature_transform=True, channel=3)
+        #     self.pointnet_emb = nn.Linear(1024,self.latent_dim)
+        if self.dataset == 'gazehoi_stage0':
             # print("correct")
+            """ 原版
             self.encode_obj_pose = nn.Linear(36,self.latent_dim)
             self.encode_obj_mesh = PointNetEncoder(global_feat=False, feature_transform=True, channel=3)
             self.pointnet_emb = nn.Linear(1024,self.latent_dim)
@@ -243,15 +247,121 @@ class CMDM(torch.nn.Module):
                                             n_self_att_heads=4,
                                             n_self_att_layers=3,
                                             dropout=0.1)
+            """
+            # 参照GIMO修改后
+            self.encode_obj_pose = nn.Linear(36,self.latent_dim)
+            
+            self.encode_obj_mesh = PointNet2SemSegSSGShape({'feat_dim': self.latent_dim})
+            self.fp_layer = MyFPModule()
+            self.gaze_linear = nn.Linear(self.latent_dim, self.latent_dim)  
+            self.encode_gaze = PerceiveEncoder(n_input_channels=self.latent_dim,
+                                            n_latent=self.length,
+                                            n_latent_channels=self.latent_dim,
+                                            n_self_att_heads=4,
+                                            n_self_att_layers=3,
+                                            dropout=0.1)
+                                            
+        elif self.dataset == 'gazehoi_stage0_flag' or self.dataset == 'gazehoi_stage0_flag2' or self.dataset == 'gazehoi_stage0_flag2_lowfps' :
+        # elif self.dataset == 'gazehoi_stage0_flag' or self.dataset == 'gazehoi_stage0_flag2' or self.dataset == 'gazehoi_stage0_flag2_lowfps' or self.dataset == 'gazehoi_stage0_flag2_lowfps_global':
+            # print("correct")
+            """ 原版
+            self.encode_obj_pose = nn.Linear(36,self.latent_dim)
+            self.encode_obj_mesh = PointNetEncoder(global_feat=False, feature_transform=True, channel=3)
+            self.pointnet_emb = nn.Linear(1024,self.latent_dim)
+            self.obj_linear = nn.Linear(self.latent_dim*4,self.latent_dim)
+            self.gaze_linear = nn.Linear(3, 16)  
+            self.encode_gaze = PerceiveEncoder(n_input_channels=16,
+                                            n_latent=345,
+                                            n_latent_channels=self.latent_dim,
+                                            n_self_att_heads=4,
+                                            n_self_att_layers=3,
+                                            dropout=0.1)
+            """
+            # 参照GIMO修改后
+            self.encode_obj_pose = nn.Linear(36,self.latent_dim)
+            
+            self.encode_obj_mesh = PointNet2SemSegSSGShape({'feat_dim': self.latent_dim})
+            self.fp_layer = MyFPModule()
+            self.gaze_linear = nn.Linear(self.latent_dim, self.latent_dim)  
+            self.encode_gaze = PerceiveEncoder(n_input_channels=self.latent_dim,
+                                            n_latent=self.length,
+                                            n_latent_channels=self.latent_dim,
+                                            n_self_att_heads=4,
+                                            n_self_att_layers=3,
+                                            dropout=0.1)
+            self.move_flag = nn.Sequential( nn.Linear(self.latent_dim, 32), nn.ELU(),
+                                            nn.Linear(32,4) )
+
+        elif  self.dataset == 'gazehoi_stage0_flag2_lowfps_global':
+            print("correct")
+            self.encode_obj_pose = nn.Linear(36,self.latent_dim)
+            
+            self.encode_obj_mesh = PointNet2SemSegSSGShape({'feat_dim': self.latent_dim})
+            self.fp_layer = MyFPModule()
+            self.gaze_linear = nn.Linear(self.latent_dim, self.latent_dim)  
+            self.encode_gaze = PerceiveEncoder(n_input_channels=self.latent_dim,
+                                            n_latent=self.length,
+                                            n_latent_channels=self.latent_dim,
+                                            n_self_att_heads=4,
+                                            n_self_att_layers=3,
+                                            dropout=0.1)
+            self.move_flag_pool = nn.MaxPool1d(kernel_size=self.length)
+            self.move_flag_linear = nn.Sequential( nn.Linear(self.latent_dim, 32), nn.ELU(),
+                                            nn.Linear(32,4) )
+
+            self.move_index_linear = nn.Sequential( nn.Linear(self.latent_dim, 32), nn.ELU(),
+                                            nn.Linear(32,8), nn.ELU(),
+                                            nn.Linear(8,1) )
+
+        elif  self.dataset == 'gazehoi_stage0_1obj':
+            print("correct")
+            self.encode_obj_pose = nn.Linear(9,self.latent_dim)
+            
+            self.encode_obj_mesh = PointNet2SemSegSSGShape({'feat_dim': self.latent_dim})
+            self.fp_layer = MyFPModule()
+            self.gaze_linear = nn.Linear(self.latent_dim, self.latent_dim)  
+            self.encode_gaze = PerceiveEncoder(n_input_channels=self.latent_dim,
+                                            n_latent=self.length,
+                                            n_latent_channels=self.latent_dim,
+                                            n_self_att_heads=4,
+                                            n_self_att_layers=3,
+                                            dropout=0.1)
+            
+            
+        elif self.dataset == 'gazehoi_stage0_1':
+            # print("correct")
+            self.encode_obj_pose = nn.Linear(9,self.latent_dim)
+            self.encode_obj_mesh = PointNetEncoder(global_feat=False, feature_transform=True, channel=3)
+            self.pointnet_emb = nn.Linear(1024,self.latent_dim)
+            self.obj_linear = nn.Linear(self.latent_dim*4,self.latent_dim)
+            self.gaze_linear = nn.Linear(3, 16)  
+            self.encode_gaze = PerceiveEncoder(n_input_channels=16,
+                                            n_latent=self.length,
+                                            n_latent_channels=self.latent_dim,
+                                            n_self_att_heads=4,
+                                            n_self_att_layers=3,
+                                            dropout=0.1)
+
+        elif self.dataset == 'gazehoi_stage1_new':
+            print("model:gazehoi_stage1_new")
+            self.encode_obj_pose = nn.Sequential(nn.Linear(9,64), nn.ELU(),
+                                                nn.Linear(64,self.latent_dim) )
+            self.encode_hand_pose = nn.Sequential(nn.Linear(99,128), nn.ELU(),
+                                                nn.Linear(128,self.latent_dim) )
+            self.encode_obj_mesh = PointNetEncoder(global_feat=False, feature_transform=True, channel=3)
+            self.pointnet_emb = nn.Linear(1024,self.latent_dim)
             
 
-        if self.dataset != 'gazehoi_stage':
+        # if self.dataset != 'gazehoi_stage':
+        if not (self.dataset.startswith('gazehoi_stage0')):
+        # if not (self.dataset.startswith('gazehoi_stage0')) and not (self.dataset == 'gazehoi_stage1_new'):
+            self.input_hint_block = HintBlock(self.data_rep, self.hint_dim, self.latent_dim)
 
             self.c_input_process = InputProcess(self.data_rep, self.input_feats+self.gru_emb_dim, self.latent_dim)
 
             self.c_sequence_pos_encoder = PositionalEncoding(self.latent_dim, self.dropout)
 
-            print("TRANS_ENC init")
+            print("ccTRANS_ENC init")
             seqTransEncoderLayer = TransformerEncoderLayer(d_model=self.latent_dim,
                                                             nhead=self.num_heads,
                                                             dim_feedforward=self.ff_size,
@@ -332,6 +442,7 @@ class CMDM(torch.nn.Module):
 
         x = self.c_input_process(x)
         # print(x.shape,guided_hint.shape,seq_mask.shape)
+
         x += guided_hint * seq_mask.permute(1, 0).unsqueeze(-1)
 
         # adding the timestep embed
@@ -376,6 +487,24 @@ class CMDM(torch.nn.Module):
             # print(obj_pose_emb.shape, obj_shape_emb.shape)
             
             x = x + obj_pose_emb + obj_shape_emb
+        elif self.dataset == 'gazehoi_stage1_new':
+            # print(x.shape)
+            """
+            提取物体pose和shape特征
+            """
+            # print(y['goal_obj_pose'].shape)
+            bs, _ = y['goal_obj_pose'].shape
+            obj_pose_emb = self.encode_obj_pose(y['goal_obj_pose'])
+            # print(obj_pose_emb.shape)
+            obj_mesh = y['obj_points'].permute(0,2,1)
+            global_obj_feat,points_feat, _ ,_ = self.encode_obj_mesh(obj_mesh)
+            # print(global_obj_feat.shape)
+            obj_shape_emb = self.pointnet_emb(global_obj_feat).unsqueeze(0)
+            # print(obj_pose_emb.shape, obj_shape_emb.shape)
+            init_hand_emb = self.encode_hand_pose(y['init_hand_pose']) #b,D
+            goal_hand_emb = self.encode_hand_pose(y['goal_hand_pose'])
+            # print(x.shape)
+            x = x + obj_pose_emb + obj_shape_emb + init_hand_emb + goal_hand_emb
         elif self.dataset == 'gazehoi_stage0':
             # print(x.shape)
             """
@@ -385,15 +514,165 @@ class CMDM(torch.nn.Module):
             init_obj_pose = y['hint'][:,0]
             obj_pose_emb = self.encode_obj_pose(init_obj_pose).unsqueeze(0)
             # print(obj_pose_emb.shape)
-            obj_mesh = y['obj_points']
+            points = y['obj_points']
             # reshape(bs,-1,3).permute(0,2,1).contiguous()
+            table = points[:,2000:]
+            obj_mesh = points[:,:2000].reshape(bs,4,500,3)
+            points_feat, global_obj_feat= self.encode_obj_mesh(points.repeat(1, 1, 2))
+            gaze = y['gaze']
+            gaze_emb = self.fp_layer(gaze, points, points_feat).permute((0, 2, 1))
+            gaze_feat = self.gaze_linear(gaze_emb)
+            gaze_feat = self.encode_gaze(gaze_feat)
 
-            global_obj_feat,points_feat, _ ,_ = self.encode_obj_mesh(obj_mesh[:,0].permute(0,2,1).contiguous())
+            # # global_obj_feat,points_feat, _ ,_ = self.encode_obj_mesh(obj_mesh[:,0].permute(0,2,1).contiguous())
+            # points_feat, global_obj_feat= self.encode_obj_mesh(table.permute(0,2,1).contiguous())
+            # obj_shape_emb = global_obj_feat
+            # scene_feat = points_feat
+            # # obj_shape_emb = self.pointnet_emb(global_obj_feat).unsqueeze(0)
+            # for i in range(0, 4):
+            #     points_feat, global_obj_feat = self.encode_obj_mesh(obj_mesh[:,i].permute(0,2,1).contiguous())
+            #     # print(global_obj_feat.shape)
+            #     obj_shape_emb += self.pointnet_emb(global_obj_feat).unsqueeze(0)
+            #     # obj_shape_emb += global_obj_feat
+            #     # scene_feat
+                
+            # gaze_emb = self.encode_gaze(self.gaze_linear(y['gaze'])).permute(1,0,2).contiguous()
+            # print(x.shape, obj_pose_emb.shape, global_obj_feat.shape, gaze_feat.shape)
+
+            x = x + obj_pose_emb + global_obj_feat + gaze_feat.permute(1,0,2).contiguous() 
+        elif self.dataset == 'gazehoi_stage0_flag':
+            # print(x.shape)
+            """
+            提取物体pose和shape特征
+            """
+            bs, nf, _ = y['gaze'].shape
+            init_obj_pose = y['hint'][:,0]
+            obj_pose_emb = self.encode_obj_pose(init_obj_pose).unsqueeze(0)
+            # print(obj_pose_emb.shape)
+            points = y['obj_points']
+            # reshape(bs,-1,3).permute(0,2,1).contiguous()
+            table = points[:,2000:]
+            obj_mesh = points[:,:2000].reshape(bs,4,500,3)
+            points_feat, global_obj_feat= self.encode_obj_mesh(points.repeat(1, 1, 2))
+            gaze = y['gaze']
+            gaze_emb = self.fp_layer(gaze, points, points_feat).permute((0, 2, 1))
+            gaze_feat = self.gaze_linear(gaze_emb)
+            gaze_feat = self.encode_gaze(gaze_feat)
+
+            x = x + obj_pose_emb + global_obj_feat + gaze_feat.permute(1,0,2).contiguous()
+            
+            feat = obj_pose_emb + global_obj_feat + gaze_feat.permute(1,0,2).contiguous()
+            feat = feat.permute(1,0,2).contiguous()
+            flag = self.move_flag(feat)
+        elif self.dataset == 'gazehoi_stage0_flag2' or self.dataset == 'gazehoi_stage0_flag2_lowfps' :
+        # elif self.dataset == 'gazehoi_stage0_flag2' or self.dataset == 'gazehoi_stage0_flag2_lowfps' or self.dataset == 'gazehoi_stage0_flag2_lowfps_global':
+            # print(x.shape)
+            """
+            提取物体pose和shape特征
+            """
+            bs, nf, _ = y['gaze'].shape
+            init_obj_pose = y['hint'][:,0]
+            obj_pose_emb = self.encode_obj_pose(init_obj_pose).unsqueeze(0)
+            # print(obj_pose_emb.shape)
+            points = y['obj_points']
+            # reshape(bs,-1,3).permute(0,2,1).contiguous()
+            table = points[:,2000:]
+            obj_mesh = points[:,:2000].reshape(bs,4,500,3)
+            points_feat, global_obj_feat= self.encode_obj_mesh(points.repeat(1, 1, 2))
+            gaze = y['gaze']
+            gaze_emb = self.fp_layer(gaze, points, points_feat).permute((0, 2, 1))
+            gaze_feat = self.gaze_linear(gaze_emb)
+            gaze_feat = self.encode_gaze(gaze_feat)
+
+            
+            feat = obj_pose_emb + global_obj_feat + gaze_feat.permute(1,0,2).contiguous()
+            feat = feat.permute(1,0,2).contiguous()
+            flag = self.move_flag(feat) # b,nf,4
+            # pred_flag = flag.permute(0,2,1).contiguous() # bs frame 4 -- b 4 frames
+            pred_move = torch.sum(flag,dim=1) # #b,4
+            obj_index = torch.argmax(pred_move,dim=-1)
+            tgt_obj = obj_mesh[torch.arange(bs),obj_index]
+            # print(tgt_obj.shape)
+            _ , tgt_obj_feat= self.encode_obj_mesh(tgt_obj.repeat(1, 1, 2))
+
+            x = x + obj_pose_emb + global_obj_feat + tgt_obj_feat + gaze_feat.permute(1,0,2).contiguous()
+
+        elif self.dataset == 'gazehoi_stage0_flag2_lowfps_global':
+            # print(x.shape)
+            """
+            提取物体pose和shape特征
+            """
+            bs, nf, _ = y['gaze'].shape
+
+            init_obj_pose = y['hint'][:,0]
+            gt_flag = y['flag']
+            obj_pose_emb = self.encode_obj_pose(init_obj_pose).unsqueeze(0)
+            # print(obj_pose_emb.shape)
+            points = y['obj_points']
+            # reshape(bs,-1,3).permute(0,2,1).contiguous()
+            table = points[:,2000:]
+            obj_mesh = points[:,:2000].reshape(bs,4,500,3)
+            points_feat, global_obj_feat= self.encode_obj_mesh(points.repeat(1, 1, 2))
+            gaze = y['gaze']
+            gaze_emb = self.fp_layer(gaze, points, points_feat).permute((0, 2, 1))
+            gaze_feat = self.gaze_linear(gaze_emb)
+            gaze_feat = self.encode_gaze(gaze_feat)
+
+            
+            feat = obj_pose_emb + global_obj_feat + gaze_feat.permute(1,0,2).contiguous()
+            feat = feat.permute(1,2,0).contiguous()
+            active_flag = self.move_flag_linear(self.move_flag_pool(feat).squeeze(-1)) # bs,4
+
+            gt_move = torch.sum(gt_flag,dim=-1) # #b,4
+            obj_index = torch.argmax(gt_move,dim=-1)
+            tgt_obj = obj_mesh[torch.arange(bs),obj_index]
+            # print(tgt_obj.shape)
+            _ , tgt_obj_feat= self.encode_obj_mesh(tgt_obj.repeat(1, 1, 2))
+            # print(gaze_feat.shape,tgt_obj_feat.shape)
+            move_flag = self.move_index_linear(gaze_feat + tgt_obj_feat.unsqueeze(1)).squeeze(-1)
+            # print(move_feat.shape)
+
+            # pred_move_index = 
+
+            x = x + obj_pose_emb + global_obj_feat + tgt_obj_feat + gaze_feat.permute(1,0,2).contiguous()
+
+        elif self.dataset == 'gazehoi_stage0_1obj':
+            """
+            提取物体pose和shape特征
+            """
+            bs, nf, _ = y['gaze'].shape
+            init_obj_pose = y['hint'][:,0]
+            obj_pose_emb = self.encode_obj_pose(init_obj_pose).unsqueeze(0)
+            points = y['obj_points']
+            table = points[:,500:]
+            points_feat, global_obj_feat= self.encode_obj_mesh(points.repeat(1, 1, 2))
+            gaze = y['gaze']
+            gaze_emb = self.fp_layer(gaze, points, points_feat).permute((0, 2, 1))
+            gaze_feat = self.gaze_linear(gaze_emb)
+            gaze_feat = self.encode_gaze(gaze_feat)
+
+            x = x + obj_pose_emb + global_obj_feat + gaze_feat.permute(1,0,2).contiguous()
+
+
+        elif self.dataset == 'gazehoi_stage0_1':
+            # print(x.shape)
+            """
+            提取物体pose和shape特征
+            """
+            bs, nf, _ = y['gaze'].shape
+            init_obj_pose = y['hint'][:,0]
+            obj_pose_emb = self.encode_obj_pose(init_obj_pose).unsqueeze(0)
+            # print(obj_pose_emb.shape)
+            points = y['obj_points']
+            # reshape(bs,-1,3).permute(0,2,1).contiguous()
+            table = points[:,500:]
+            obj_mesh = points[:,:500].reshape(bs,500,3)
+            global_obj_feat,points_feat, _ ,_ = self.encode_obj_mesh(table.permute(0,2,1).contiguous())
             obj_shape_emb = self.pointnet_emb(global_obj_feat).unsqueeze(0)
-            for i in range(1, 4):
-                global_obj_feat,points_feat, _ ,_ = self.encode_obj_mesh(obj_mesh[:,i].permute(0,2,1).contiguous())
-                # print(global_obj_feat.shape)
-                obj_shape_emb += self.pointnet_emb(global_obj_feat).unsqueeze(0)
+            # for i in range(0, 4):
+            global_obj_feat,points_feat, _ ,_ = self.encode_obj_mesh(obj_mesh.permute(0,2,1).contiguous())
+            # print(global_obj_feat.shape)
+            obj_shape_emb += self.pointnet_emb(global_obj_feat).unsqueeze(0)
                 
             gaze_emb = self.encode_gaze(self.gaze_linear(y['gaze'])).permute(1,0,2).contiguous()
             # print(x.shape, obj_pose_emb.shape, obj_shape_emb.shape, gaze_emb.shape)
@@ -406,20 +685,113 @@ class CMDM(torch.nn.Module):
         output = self.seqTransEncoder(xseq, control=control)[1:]  # , src_key_padding_mask=~maskseq)  # [seqlen, bs, d]
 
         output = self.output_process(output)  # [bs, njoints, nfeats, nframes]
-        return output
+        # print(self.dataset)
+        if self.dataset == 'gazehoi_stage0_flag' or self.dataset == 'gazehoi_stage0_flag2' or self.dataset == 'gazehoi_stage0_flag2_lowfps':
+        # if self.dataset == 'gazehoi_stage0_flag' or self.dataset == 'gazehoi_stage0_flag2' or self.dataset == 'gazehoi_stage0_flag2_lowfps' or self.dataset == 'gazehoi_stage0_flag2_lowfps_global':
+            # print("return here")
+            return output, flag
+        elif self.dataset == 'gazehoi_stage0_flag2_lowfps_global':
+            # print("return here")
+            return output, (active_flag,move_flag)
+        else:
+            # print("wrong return")
+            return output
+
+    def mdm_forward_test(self, x, timesteps, y=None, control=None):
+        """
+        x: [batch_size, njoints, nfeats, max_frames], denoted x_t in the paper
+        timesteps: [batch_size] (int)
+        """
+        emb = self.embed_timestep(timesteps)  # [1, bs, d]
+        # print("emb shape:", emb.shape)
+
+        force_mask = y.get('uncond', False)
+        # if 'text' in self.cond_mode:
+        #     enc_text = self.encode_text(y['text'])
+        #     emb += self.embed_text(self.mask_cond(enc_text, force_mask=force_mask))
+        
+        x = self.input_process(x)
+        
+        if self.dataset == 'gazehoi_stage0_flag2_lowfps_global':
+            # print(x.shape)
+            """
+            提取物体pose和shape特征
+            """
+            bs, nf, _ = y['gaze'].shape
+
+            init_obj_pose = y['hint'][:,0]
+            obj_pose_emb = self.encode_obj_pose(init_obj_pose).unsqueeze(0)
+            # print(obj_pose_emb.shape)
+            points = y['obj_points']
+            # reshape(bs,-1,3).permute(0,2,1).contiguous()
+            table = points[:,2000:]
+            obj_mesh = points[:,:2000].reshape(bs,4,500,3)
+            points_feat, global_obj_feat= self.encode_obj_mesh(points.repeat(1, 1, 2))
+            gaze = y['gaze']
+            gaze_emb = self.fp_layer(gaze, points, points_feat).permute((0, 2, 1))
+            gaze_feat = self.gaze_linear(gaze_emb)
+            gaze_feat = self.encode_gaze(gaze_feat)
+
+            
+            feat = obj_pose_emb + global_obj_feat + gaze_feat.permute(1,0,2).contiguous()
+            feat = feat.permute(1,2,0).contiguous()
+            active_flag = self.move_flag_linear(self.move_flag_pool(feat).squeeze(-1)) # bs,4
+
+            # flag给ground truth
+            gt_flag = y['flag']
+            gt_move = torch.sum(gt_flag,dim=-1) # #b,4
+            obj_index = torch.argmax(gt_move,dim=-1)
+            # print('gt_flag!')
+
+            # test 时候该用的
+            # obj_index = torch.argmax(active_flag,dim=-1)
+
+            tgt_obj = obj_mesh[torch.arange(bs),obj_index]
+            # print(tgt_obj.shape)
+            _ , tgt_obj_feat= self.encode_obj_mesh(tgt_obj.repeat(1, 1, 2))
+            # print(gaze_feat.shape,tgt_obj_feat.shape)
+            move_flag = self.move_index_linear(gaze_feat + tgt_obj_feat.unsqueeze(1)).squeeze(-1)
+            # print(move_feat.shape)
+
+            # pred_move_index = 
+
+            x = x + obj_pose_emb + global_obj_feat + tgt_obj_feat + gaze_feat.permute(1,0,2).contiguous()
+
+        # adding the timestep embed
+        xseq = torch.cat((emb, x), axis=0)  # [seqlen+1, bs, d]
+        xseq = self.sequence_pos_encoder(xseq)  # [seqlen+1, bs, d]
+        output = self.seqTransEncoder(xseq, control=control)[1:]  # , src_key_padding_mask=~maskseq)  # [seqlen, bs, d]
+
+        output = self.output_process(output)  # [bs, njoints, nfeats, nframes]
+        return output, (active_flag,move_flag)
 
     def forward(self, x, timesteps, y=None):
         """
         x: [batch_size, njoints, nfeats, max_frames], denoted x_t in the paper
         timesteps: [batch_size] (int)
         """
-        if 'hint' in y.keys() :
-        # if 'hint' in y.keys() and self.dataset != 'gazehoi_stage0':
+        # if 'hint' in y.keys() :
+        if 'hint' in y.keys() and not (self.dataset.startswith('gazehoi_stage0')) :
+        # if 'hint' in y.keys() and not (self.dataset.startswith('gazehoi_stage0')) and not (self.dataset == 'gazehoi_stage1_new'):
             control = self.cmdm_forward(x, timesteps, y)
         else:
             control = None
 
         output = self.mdm_forward(x, timesteps, y, control)
+        return output
+
+    def forward_test(self, x, timesteps, y=None):
+        """
+        x: [batch_size, njoints, nfeats, max_frames], denoted x_t in the paper
+        timesteps: [batch_size] (int)
+        """
+        # if 'hint' in y.keys() :
+        if 'hint' in y.keys() and not (self.dataset.startswith('gazehoi_stage0')):
+            control = self.cmdm_forward(x, timesteps, y)
+        else:
+            control = None
+
+        output = self.mdm_forward_test(x, timesteps, y, control)
         return output
 
     def _apply(self, fn):

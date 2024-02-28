@@ -16,6 +16,7 @@ from torch.optim.lr_scheduler import StepLR
 from torch.utils.tensorboard import SummaryWriter
 from diffusion.nn import mean_flat, sum_flat
 import torch.nn.functional as F
+import time
 
 def masked_l2(a, b, mask):
     # assuming a.shape == b.shape == bs, J, Jdim, seqlen
@@ -107,20 +108,22 @@ def main():
     dist_util.setup_dist(args.device)
 
     print("creating data loader...")
-    train_data = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=args.num_frames,hint_type=args.hint_type)
     test_data = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=args.num_frames,hint_type=args.hint_type, split='test')
+    train_data = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=args.num_frames,hint_type=args.hint_type)
+    
     model = gaze_obj_model(**get_model_args(args, train_data))
     model.to(dist_util.dev())
     device = dist_util.dev()
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
-    scheduler = StepLR(optimizer, step_size=300, gamma=0.1)
+    scheduler = StepLR(optimizer, step_size=20, gamma=0.1)
     print('Total params: %.2fM' % (sum(p.numel() for p in model.parameters()) / 1000000.0))
     print("Training...")
     num_epoch = 10000
     best_loss = 100
     writer = SummaryWriter(log_dir=args.save_dir)
     iter = 0
+    name = time.strftime("%Y%m%d%H%M%S%MS",time.localtime(time.time()))
     for epoch in range(num_epoch):
         # print("EPOCH:",epoch)
         total_loss = 0
@@ -143,7 +146,7 @@ def main():
             obj_rec_loss = masked_l2(obj_pose.permute(0,2,1).contiguous().unsqueeze(2),pre_obj.permute(0,2,1).contiguous().unsqueeze(2),mask)
 
             # loss = (kl_loss ).mean()
-            loss = (kl_loss + gaze_rec_loss + obj_rec_loss).mean()
+            loss = (gaze_rec_loss*100 + obj_rec_loss*100).mean()
             # print(kl_loss.mean(),gaze_rec_loss.mean(),obj_rec_loss.mean())
             # print(f"Epoch{epoch} -- TrainLoss",loss.item())
             writer.add_scalar("toal train loss",loss,iter)
@@ -155,12 +158,12 @@ def main():
             loss.backward()
             optimizer.step()
             iter = iter + 1
-        total_loss = total_loss / 10
+        total_loss = total_loss / 1000
         print(f"Epoch{epoch} -- TrainLoss",total_loss.item())
-        best_loss = 400
+        
         if total_loss < 400:
             for motion,cond in test_data:
-                print("in")
+                # print("in")
                 motion = motion.to(device)
                 cond['y'] = {key: val.to(device) if torch.is_tensor(val) else val for key, val in cond['y'].items()}
                 mask = cond['y']['mask']
@@ -187,9 +190,9 @@ def main():
                 best_loss = loss
                 if best_loss < 100:
                     
-rt =                name = time.strftime("%Y%m%d%H%M%S%MS",time.localtime(time.time()))
-                    save_dir = os.path.join(args.save_dir,'model')
-                    save_path = os.path.join(args.save_dir, str(epoch).zfill(6)+f'_model_{best_loss}.pt')
+                    save_dir = os.path.join(args.save_dir,name)
+                    os.makedirs(save_dir,exist_ok=True)
+                    save_path = os.path.join(save_dir, str(epoch).zfill(6)+f'_model_{best_loss}.pt')
                     torch.save({
                                 'model_state_dict': model.state_dict(),
                                 'optimizer_state_dict': optimizer.state_dict()

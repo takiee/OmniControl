@@ -123,6 +123,19 @@ def obj_matrix2rot6d(motion):
     motion = torch.cat((motion[:,:,:3,3], R_rot6d),dim=-1)
     return motion
 
+def obj_rot6d2matrix(motion):
+    # bs, nf,36 -- bs,nf,4,3,4
+    bs,nf ,_= motion.shape
+    device = motion.device
+    motion = motion.reshape(bs,nf,4,9)
+    R_rot6d = motion[:,:,:,3:]
+    R_matrix = rotation_6d_to_matrix(R_rot6d)
+
+    new_motion = torch.zeros((bs,nf,4,3,4)).to(device)
+    new_motion[:,:,:,:3,3] = motion[:,:,:,:3]
+    new_motion[:,:,:,:3,:3] = R_matrix
+    return new_motion
+
 
 def local2global_axis_by_matrix(motion):
      # 只对global RT做相对变换
@@ -169,6 +182,34 @@ def local2global_rot6d_by_matrix(motion):
     new_motion[:,:,3:9] = rot
     return new_motion
 
+def local2global_axis_by_matrix(motion):
+    # 只对global RT做相对变换
+    bs,nf ,_= motion.shape
+    device = motion.device
+    l_velocity = motion[:,:,:3]
+    r_velocity = motion[:,:,3:9]
+
+    trans = torch.cumsum(l_velocity,dim=1)
+
+    r_velocity = rotation_6d_to_matrix(r_velocity)
+    rot = r_velocity[:,0].unsqueeze(1) #bs,1,3,3
+    cur_r = rot
+    for i in range(1,nf):
+        rot_i = torch.einsum('fipn,fink->fipk',r_velocity[:,i].unsqueeze(1),cur_r)
+        cur_r = rot_i
+        rot = torch.cat((rot,rot_i),dim=1)
+    # print(rot.shape)
+    rot = matrix_to_axis_angle(rot)
+    rot_local = matrix_to_axis_angle(rotation_6d_to_matrix(motion[:,:,9:].reshape(bs,nf,15,6)))
+
+    # print(rot.shape)
+    
+    new_motion = torch.zeros((bs,nf,51)).to(device)
+    new_motion[:,:,:3] = trans
+    new_motion[:,:,3:6] = rot.reshape(bs,nf,-1)
+    new_motion[:,:,6:] = rot_local.reshape(bs,nf,-1)
+    return new_motion
+
 def obj_local2global_rot6d_by_matrix(motion):
      # 只对global RT做相对变换
     #  反过来 最后一帧是参考
@@ -202,11 +243,11 @@ def obj_local2global_rot6d_by_matrix(motion):
 def obj_local2global_matrix(motion):
      # 只对global RT做相对变换
     #  反过来 最后一帧是参考
-    
     bs,nf ,_= motion.shape
-    new_motion = torch.zeros((bs,nf,4,3,4))
+    device = motion.device
+    new_motion = torch.zeros((bs,nf,4,3,4)).to(device)
     motion = motion.reshape(bs,nf,4,9)
-    new_motion = motion.clone()
+    # new_motion = motion.clone()
     for k in range(4):
         l_velocity = torch.flip(motion[:,:,k,:3],dims=[1])
         r_velocity = motion[:,:,k,3:9]
@@ -224,7 +265,8 @@ def obj_local2global_matrix(motion):
             rot = torch.cat((rot_i,rot),dim=1)
 
         # rot = matrix_to_rotation_6d(rot)
-        
+        # print(trans.shape, rot.shape)
+        # print( new_motion[:,:,k,:3,3].shape)
         new_motion[:,:,k,:3,3] = trans
         new_motion[:,:,k,:3,:3] = rot
     # new_motion = new_motion.reshape(bs,nf,-1)

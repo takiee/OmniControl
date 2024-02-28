@@ -168,6 +168,15 @@ class TrainLoop:
                     model_kwargs=micro_cond,
                     dataset=self.data.dataset
                 )
+            elif self.dataset == 'gazehoi_stage1_new':
+                compute_losses = functools.partial(
+                    self.diffusion.training_losses_stage1_new,
+                    self.ddp_model,
+                    micro,  # [bs, ch, image_size, image_size]
+                    t,  # [bs](int) sampled timesteps
+                    model_kwargs=micro_cond,
+                    dataset=self.data.dataset
+                )
             elif self.dataset == 'gazehoi_stage2':
                 compute_losses = functools.partial(
                     self.diffusion.training_losses_stage2,
@@ -180,6 +189,42 @@ class TrainLoop:
             elif self.dataset == 'gazehoi_stage0':
                 compute_losses = functools.partial(
                     self.diffusion.training_losses_stage0,
+                    self.ddp_model,
+                    micro,  # [bs, ch, image_size, image_size]
+                    t,  # [bs](int) sampled timesteps
+                    model_kwargs=micro_cond,
+                    dataset=self.data.dataset
+                )
+            elif self.dataset == 'gazehoi_stage0_1':
+                compute_losses = functools.partial(
+                    self.diffusion.training_losses_stage0_1,
+                    self.ddp_model,
+                    micro,  # [bs, ch, image_size, image_size]
+                    t,  # [bs](int) sampled timesteps
+                    model_kwargs=micro_cond,
+                    dataset=self.data.dataset
+                )
+            elif self.dataset == 'gazehoi_stage0_1obj':
+                compute_losses = functools.partial(
+                    self.diffusion.training_losses_stage0_1obj,
+                    self.ddp_model,
+                    micro,  # [bs, ch, image_size, image_size]
+                    t,  # [bs](int) sampled timesteps
+                    model_kwargs=micro_cond,
+                    dataset=self.data.dataset
+                )
+            elif self.dataset == 'gazehoi_stage0_flag2_lowfps_global':
+                compute_losses = functools.partial(
+                    self.diffusion.training_losses_stage0_flag_global,
+                    self.ddp_model,
+                    micro,  # [bs, ch, image_size, image_size]
+                    t,  # [bs](int) sampled timesteps
+                    model_kwargs=micro_cond,
+                    dataset=self.data.dataset
+                )
+            elif self.dataset == 'gazehoi_stage0_flag' or self.dataset == 'gazehoi_stage0_flag2' or self.dataset == 'gazehoi_stage0_flag2_lowfps':
+                compute_losses = functools.partial(
+                    self.diffusion.training_losses_stage0_flag,
                     self.ddp_model,
                     micro,  # [bs, ch, image_size, image_size]
                     t,  # [bs](int) sampled timesteps

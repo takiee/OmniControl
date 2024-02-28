@@ -21,13 +21,26 @@ class ClassifierFreeSampleModel(nn.Module):
         self.nfeats = self.model.nfeats
         self.data_rep = self.model.data_rep
         self.cond_mode = self.model.cond_mode
+        self.dataset = self.model.dataset
 
     def forward(self, x, timesteps, y=None):
         cond_mode = self.model.cond_mode
         assert cond_mode in ['only_text', 'only_spatial', 'both_text_spatial']
         y_uncond = deepcopy(y)
         y_uncond['uncond'] = True
-        out = self.model(x, timesteps, y)
-        out_uncond = self.model(x, timesteps, y_uncond)
-        return out_uncond + (y['scale'].view(-1, 1, 1, 1) * (out - out_uncond))
+        # out = self.model(x, timesteps, y)
+        if self.dataset=='gazehoi_stage0_flag2_lowfps_global':
+            out,flag = self.model.forward_test(x, timesteps, y)
+            out_uncond,_ = self.model.forward_test(x, timesteps, y_uncond)
+            output = out_uncond + (y['scale'].view(-1, 1, 1, 1) * (out - out_uncond))
+            return output,flag
+        elif self.dataset.startswith('gazehoi_stage0_flag'):
+            out,flag = self.model(x, timesteps, y)
+            out_uncond,_ = self.model(x, timesteps, y_uncond)
+            output = out_uncond + (y['scale'].view(-1, 1, 1, 1) * (out - out_uncond))
+            return output,flag
+        else:
+            out = self.model(x, timesteps, y)
+            out_uncond = self.model(x, timesteps, y_uncond)
+            return out_uncond + (y['scale'].view(-1, 1, 1, 1) * (out - out_uncond))
 
