@@ -42,7 +42,7 @@ def get_model_args(args, data):
         njoints = 251
         nfeats = 1
     # elif args.dataset == 'gazehoi_stage1' or args.dataset == 'gazehoi_stage2' :
-    elif args.dataset == 'gazehoi_stage1' or args.dataset == 'gazehoi_stage2' or args.dataset == 'gazehoi_stage1_new':
+    elif args.dataset == 'gazehoi_stage1' or args.dataset == 'gazehoi_stage2' or args.dataset == 'gazehoi_stage1_new' or args.dataset == 'gazehoi_stage1_repair':
         # print('gazehoi!!')
         data_rep = 'rot6d'
         # njoints = 51

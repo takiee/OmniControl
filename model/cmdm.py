@@ -342,8 +342,7 @@ class CMDM(torch.nn.Module):
                                             n_self_att_layers=3,
                                             dropout=0.1)
 
-        elif self.dataset == 'gazehoi_stage1_new':
-            print("model:gazehoi_stage1_new")
+        elif self.dataset == 'gazehoi_stage1_new' or self.dataset == 'gazehoi_stage1_repair':
             self.encode_obj_pose = nn.Sequential(nn.Linear(9,64), nn.ELU(),
                                                 nn.Linear(64,self.latent_dim) )
             self.encode_hand_pose = nn.Sequential(nn.Linear(99,128), nn.ELU(),
@@ -354,6 +353,7 @@ class CMDM(torch.nn.Module):
 
         # if self.dataset != 'gazehoi_stage':
         if not (self.dataset.startswith('gazehoi_stage0')):
+        # if not (self.dataset.startswith('gazehoi_stage0')) and self.dataset != 'gazehoi_stage1_repair':
         # if not (self.dataset.startswith('gazehoi_stage0')) and not (self.dataset == 'gazehoi_stage1_new'):
             self.input_hint_block = HintBlock(self.data_rep, self.hint_dim, self.latent_dim)
 
@@ -487,7 +487,7 @@ class CMDM(torch.nn.Module):
             # print(obj_pose_emb.shape, obj_shape_emb.shape)
             
             x = x + obj_pose_emb + obj_shape_emb
-        elif self.dataset == 'gazehoi_stage1_new':
+        elif self.dataset == 'gazehoi_stage1_new' or self.dataset == 'gazehoi_stage1_repair':
             # print(x.shape)
             """
             提取物体pose和shape特征
@@ -771,8 +771,8 @@ class CMDM(torch.nn.Module):
         timesteps: [batch_size] (int)
         """
         # if 'hint' in y.keys() :
-        if 'hint' in y.keys() and not (self.dataset.startswith('gazehoi_stage0')) :
-        # if 'hint' in y.keys() and not (self.dataset.startswith('gazehoi_stage0')) and not (self.dataset == 'gazehoi_stage1_new'):
+        # if 'hint' in y.keys() and not (self.dataset.startswith('gazehoi_stage0')) and self.dataset != 'gazehoi_stage1_repair' :
+        if 'hint' in y.keys() and not (self.dataset.startswith('gazehoi_stage0')) and not (self.dataset == 'gazehoi_stage1_new'):
             control = self.cmdm_forward(x, timesteps, y)
         else:
             control = None

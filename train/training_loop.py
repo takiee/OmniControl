@@ -109,6 +109,7 @@ class TrainLoop:
                     break
 
                 motion = motion.to(self.device)
+                # print(motion.shape)
                 cond['y'] = {key: val.to(self.device) if torch.is_tensor(val) else val for key, val in cond['y'].items()}
 
                 self.run_step(motion, cond)
@@ -171,6 +172,15 @@ class TrainLoop:
             elif self.dataset == 'gazehoi_stage1_new':
                 compute_losses = functools.partial(
                     self.diffusion.training_losses_stage1_new,
+                    self.ddp_model,
+                    micro,  # [bs, ch, image_size, image_size]
+                    t,  # [bs](int) sampled timesteps
+                    model_kwargs=micro_cond,
+                    dataset=self.data.dataset
+                )
+            elif self.dataset == 'gazehoi_stage1_repair':
+                compute_losses = functools.partial(
+                    self.diffusion.training_losses_stage1_repair,
                     self.ddp_model,
                     micro,  # [bs, ch, image_size, image_size]
                     t,  # [bs](int) sampled timesteps

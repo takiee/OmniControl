@@ -227,7 +227,7 @@ class GaussianDiffusion:
         elif dataset == 'kit':
             spatial_norm_path = './dataset/kit_spatial_norm'
             data_root = './dataset/KIT-ML'
-        elif dataset == 'gazehoi_stage1' or dataset == 'gazehoi_stage2'or dataset == 'gazehoi_stage1_new':
+        elif dataset == 'gazehoi_stage1' or dataset == 'gazehoi_stage2'or dataset == 'gazehoi_stage1_new' or dataset == 'gazehoi_stage1_repair':
             # self.raw_mean = torch.from_numpy(np.load('/root/code/OmniControl/dataset/gazehoi_mean.npy')) # 原始关节点的mean,std
             # self.raw_std = torch.from_numpy(np.load('/root/code/OmniControl/dataset/gazehoi_std.npy'))
             # self.mean = torch.from_numpy(np.load('/root/code/OmniControl/dataset/gazehoi_mean.npy')).float() # humanl3d转换后的mean,std
@@ -519,11 +519,11 @@ class GaussianDiffusion:
             x.detach()
         return loss, grad
 
-    def gradients(self, x, hint, mask_hint,mask, joint_ids=None):
+    def gradients(self, x, hint, mask_hint,mask, length = None,joint_ids=None):
         with torch.enable_grad():
             x.requires_grad_(True)
             
-            loss1 = self.masked_l2(x[:,:9], torch.zeros_like(x[:,:9]),mask) 
+            # loss1 = self.masked_l2(x[:,:9], torch.zeros_like(x[:,:9]),mask) 
             # print('1',loss1.shape)
             x_ = x.permute(0, 3, 2, 1).contiguous()
             x_ = x_.squeeze(2)
@@ -537,8 +537,8 @@ class GaussianDiffusion:
             # print(torch.mean(loss1),torch.mean(loss2))
             # print(loss.shape)
             # torch.autograd.set_detect_anomaly(True)
-            # loss = loss2
-            loss = loss1 * 0.01 + loss2
+            loss = loss2
+            # loss = loss1 * 0.01 + loss2
             grad = torch.autograd.grad([loss.sum()], [x])[0]
             # print(grad[:])
             # the motion in HumanML3D always starts at the origin (0,y,0), so we zero out the gradients for the root joint
@@ -713,6 +713,11 @@ class GaussianDiffusion:
 
         # process hint
         hint = model_kwargs['y']['hint'].clone().detach()
+        length = model_kwargs['y']['lengths'].clone().detach().long()
+        # print(length.shape)
+        # print(type(length))
+        # print(type(length[0]))
+        # length = model_kwargs['y']['length'].clone().detach()
         # print(hint.shape)
         # mask_hint = hint.view(hint.shape[0], hint.shape[1], n_joint, 3).sum(dim=-1, keepdim=True) != 0
         mask_hint = hint.view(hint.shape[0], hint.shape[1],-1).sum(dim=-1, keepdim=True) != 0
@@ -740,7 +745,7 @@ class GaussianDiffusion:
         #     scale = 20
         mask = model_kwargs['y']['mask']
         for _ in range(n_guide_steps):
-            loss, grad = self.gradients(x, hint, mask_hint,mask)
+            loss, grad = self.gradients(x, hint, mask_hint,mask,length)
             # print(grad.shape)
             # print(grad[0,:,0,1])
             # print(grad[0,:,0,0])
@@ -1032,28 +1037,28 @@ class GaussianDiffusion:
             denoised_fn=denoised_fn,
             model_kwargs=model_kwargs,
         )
-        # if 'hint' in model_kwargs['y'].keys():
-        #     # spatial guidance/classifier guidance
-        #     hint = model_kwargs['y']['hint']
-        #     # if hint.shape[-1] == 99: 
-        #     if self.dataset == 'gazehoi_stage1' :
-        #     # if self.dataset == 'gazehoi_stage1' or self.dataset == 'gazehoi_stage1_new':
-        #         out['mean'] = self.guide(out['mean'], t, model_kwargs=model_kwargs)
-        #     elif self.dataset == 'gazehoi_stage1_new':
-        #         out['mean'] = self.guide(out['mean'], t, model_kwargs=model_kwargs)
-        #         # out['mean'] = self.guide_new(out['mean'], t, model_kwargs=model_kwargs)
-        #     elif self.dataset == 'gazehoi_stage0':
-        #     # elif hint.shape[-1] == 36:
-        #         out['mean'] = self.guide_stage0(out['mean'], t, model_kwargs=model_kwargs)
-        #     elif self.dataset == 'gazehoi_stage0_flag2_lowfps':
-        #         out['mean'] = self.guide_stage0(out['mean'], t, model_kwargs=model_kwargs)
-        #     # elif self.dataset == 'gazehoi_stage0_flag2_lowfps_global':
-        #     #     out['mean'] = self.guide_stage0(out['mean'], t, model_kwargs=model_kwargs)
-        #     elif self.dataset == 'gazehoi_stage0_1':
-        #     # elif hint.shape[-1] == 9:
-        #         out['mean'] = self.guide_stage0_1(out['mean'], t, model_kwargs=model_kwargs)
-        #     elif self.dataset == 'gazehoi_stage2':
-        #         out['mean'] = self.guide_stage2(out['mean'], t, model_kwargs=model_kwargs)
+        if 'hint' in model_kwargs['y'].keys():
+            # spatial guidance/classifier guidance
+            hint = model_kwargs['y']['hint']
+            # if hint.shape[-1] == 99: 
+            if self.dataset == 'gazehoi_stage1' :
+            # if self.dataset == 'gazehoi_stage1' or self.dataset == 'gazehoi_stage1_new':
+                out['mean'] = self.guide(out['mean'], t, model_kwargs=model_kwargs)
+            elif self.dataset == 'gazehoi_stage1_new':
+                out['mean'] = self.guide(out['mean'], t, model_kwargs=model_kwargs)
+                # out['mean'] = self.guide_new(out['mean'], t, model_kwargs=model_kwargs)
+            elif self.dataset == 'gazehoi_stage0':
+            # elif hint.shape[-1] == 36:
+                out['mean'] = self.guide_stage0(out['mean'], t, model_kwargs=model_kwargs)
+            elif self.dataset == 'gazehoi_stage0_flag2_lowfps':
+                out['mean'] = self.guide_stage0(out['mean'], t, model_kwargs=model_kwargs)
+            # elif self.dataset == 'gazehoi_stage0_flag2_lowfps_global':
+            #     out['mean'] = self.guide_stage0(out['mean'], t, model_kwargs=model_kwargs)
+            elif self.dataset == 'gazehoi_stage0_1':
+            # elif hint.shape[-1] == 9:
+                out['mean'] = self.guide_stage0_1(out['mean'], t, model_kwargs=model_kwargs)
+            elif self.dataset == 'gazehoi_stage2':
+                out['mean'] = self.guide_stage2(out['mean'], t, model_kwargs=model_kwargs)
 
         
 
@@ -1398,6 +1403,76 @@ class GaussianDiffusion:
         terms["loss"] = terms["rot_mse"] + terms['global_mse'] + terms['goal_pose'] + terms['init_pose']
         # terms["loss"] = terms["rot_mse"] + terms['global_mse'] + terms['time_smooth'] * 0.1 + terms['goal_pose'] + terms['init_pose']
         # terms["loss"] = terms["rot_mse"] + terms['time_smooth'] * 0.1
+
+        return terms
+
+    def training_losses_stage1_repair(self, model, x_start, t, model_kwargs=None, noise=None, dataset=None):
+        """
+        Compute training losses for a single timestep.
+
+        :param model: the model to evaluate loss on.
+        :param x_start: the [N x C x ...] tensor of inputs.
+        :param t: a batch of timestep indices.
+        :param model_kwargs: if not None, a dict of extra keyword arguments to
+            pass to the model. This can be used for conditioning.
+        :param noise: if specified, the specific Gaussian noise to try to remove.
+        :return: a dict with the key "loss" containing a tensor of shape [N].
+                 Some mean or variance settings may also have other keys.
+        """
+
+        mask = model_kwargs['y']['mask']
+
+        if model_kwargs is None:
+            model_kwargs = {}
+        if noise is None:
+            noise = th.randn_like(x_start)
+        x_t = self.q_sample(x_start, t, noise=noise) # 对x0加噪
+        # x_t = self.guide(x_t, t, model_kwargs=model_kwargs, train=True)
+        # print(x_t.shape)
+        terms = {}
+        # print(x_t.shape)
+        model_output = model(x_t, self._scale_timesteps(t), **model_kwargs)
+        # model_output = self.guide(model_output,t,model_kwargs=model_kwargs, train=True)
+
+        target = {
+            ModelMeanType.PREVIOUS_X: self.q_posterior_mean_variance(
+                x_start=x_start, x_t=x_t, t=t
+            )[0],
+            ModelMeanType.START_X: x_start,
+            ModelMeanType.EPSILON: noise,
+        }[self.model_mean_type]
+        assert model_output.shape == target.shape == x_start.shape  # [bs, njoints, nfeats, nframes]
+        bs = target.shape[0]
+
+        terms["rot_mse"] = self.masked_l2(target, model_output, mask) # mean_flat(rot_mse)
+        
+        # 相对表示转为绝对表示
+        target_global = target.permute(0, 3, 2, 1).squeeze(2).contiguous()
+        output_global = model_output.permute(0, 3, 2, 1).squeeze(2).contiguous()
+        target_global = local2global_rot6d_by_matrix(target_global)[:,:,:9].permute(0,2,1).unsqueeze(2) #global RT
+        output_global = local2global_rot6d_by_matrix(output_global)[:,:,:9].permute(0,2,1).unsqueeze(2) #global RT
+        terms['global_mse'] = self.masked_l2(target_global, output_global, mask)
+       
+        goal_index = model_kwargs['y']['lengths'] - 1
+        target_goal = torch.cat((target_global[torch.arange(bs),:9,:,goal_index].unsqueeze(-1), target[torch.arange(bs),9:,:,goal_index].unsqueeze(-1)),dim=1)
+        output_goal = torch.cat((output_global[torch.arange(bs),:9,:,goal_index].unsqueeze(-1), model_output[torch.arange(bs),9:,:,goal_index].unsqueeze(-1)),dim=1)
+        terms['goal_pose'] = self.masked_l2(target_goal, output_goal, mask)
+
+
+        target_init = torch.cat((target_global[:,:9,:,0].unsqueeze(-1), target[:,9:,:,0].unsqueeze(-1)),dim=1)
+        output_init = torch.cat((output_global[:,:9,:,0].unsqueeze(-1), model_output[:,9:,:,0].unsqueeze(-1)),dim=1)
+        terms['init_pose'] = self.masked_l2(target_init, output_init, mask)
+
+
+        terms['time_smooth'] = self.masked_l2(model_output[:,:9], torch.zeros_like(model_output[:,:9]),mask)
+
+
+        terms["loss"] = terms["rot_mse"] + terms['global_mse'] * 10 + terms['goal_pose'] * 10 + terms['init_pose'] * 5 + terms['time_smooth'] * 0.01
+        # terms["loss"] = terms["rot_mse"] + terms['global_mse'] * 20 
+        # terms["loss"] = terms["rot_mse"] + terms['global_mse'] * 20 + terms['time_smooth'] * 0.01
+        # terms["loss"] = terms["rot_mse"]*5 + terms['global_mse'] * 20 + terms['goal_pose'] * 10 + terms['init_pose'] * 5 + terms['time_smooth'] * 0.01
+
+        # print(terms["rot_mse"].mean() , terms['global_mse'].mean() , terms['goal_pose'].mean() , terms['init_pose'].mean() , terms['time_smooth'].mean())
 
         return terms
 

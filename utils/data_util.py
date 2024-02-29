@@ -182,10 +182,70 @@ def local2global_rot6d_by_matrix(motion):
     new_motion[:,:,3:9] = rot
     return new_motion
 
+def local2global_rot6d_by_matrix_repair(motion,length):
+     # 只对global RT做相对变换
+    bs,nf,_ = motion.shape
+    device = motion.device
+    mask_length = nf-length
+    mask = torch.arange(nf).to(device).unsqueeze(0) < mask_length.unsqueeze(-1)
+    mask = mask.to(device)
+    # print(mask.shape)
+    motion[mask] = 0
+    # print(motion)
+    l_velocity = motion[:,:,:3]
+    r_velocity = motion[:,:,3:9]
+
+    trans = torch.cumsum(l_velocity,dim=1)
+
+    r_velocity = rotation_6d_to_matrix(r_velocity)
+    nf = l_velocity.shape[1]
+    rot = r_velocity[:,0].unsqueeze(1) #bs,1,3,3
+    cur_r = rot
+    for i in range(1,nf):
+        rot_i = torch.einsum('fipn,fink->fipk',r_velocity[:,i].unsqueeze(1),cur_r)
+        cur_r = rot_i
+        rot = torch.cat((rot,rot_i),dim=1)
+
+    rot = matrix_to_rotation_6d(rot)
+    new_motion = motion.clone()
+    new_motion[:,:,:3] = trans
+    new_motion[:,:,3:9] = rot
+    return new_motion
+
 def local2global_axis_by_matrix(motion):
     # 只对global RT做相对变换
-    bs,nf ,_= motion.shape
+    bs,nf ,_= motion.shape # bs,nf,D
     device = motion.device
+    l_velocity = motion[:,:,:3]
+    r_velocity = motion[:,:,3:9]
+
+    trans = torch.cumsum(l_velocity,dim=1)
+
+    r_velocity = rotation_6d_to_matrix(r_velocity)
+    rot = r_velocity[:,0].unsqueeze(1) #bs,1,3,3
+    cur_r = rot
+    for i in range(1,nf):
+        rot_i = torch.einsum('fipn,fink->fipk',r_velocity[:,i].unsqueeze(1),cur_r)
+        cur_r = rot_i
+        rot = torch.cat((rot,rot_i),dim=1)
+    # print(rot.shape)
+    rot = matrix_to_axis_angle(rot)
+    rot_local = matrix_to_axis_angle(rotation_6d_to_matrix(motion[:,:,9:].reshape(bs,nf,15,6)))
+
+    # print(rot.shape)
+    
+    new_motion = torch.zeros((bs,nf,51)).to(device)
+    new_motion[:,:,:3] = trans
+    new_motion[:,:,3:6] = rot.reshape(bs,nf,-1)
+    new_motion[:,:,6:] = rot_local.reshape(bs,nf,-1)
+    return new_motion
+
+def local2global_axis_by_matrix_repair(motion):
+    # 只对global RT做相对变换
+    bs,nf ,_= motion.shape # bs,nf,D
+    device = motion.device
+    # motion[]
+    
     l_velocity = motion[:,:,:3]
     r_velocity = motion[:,:,3:9]
 

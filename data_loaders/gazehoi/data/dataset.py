@@ -290,6 +290,103 @@ class GazeHOIDataset_stage1_new(data.Dataset):
         return local_hand_pose_6d, hint, init_hand_pose, goal_hand_pose, goal_obj_pose_rot6d,mano_beta.numpy()[:60], obj_verts,seq_length,seq
         # return local_hand_pose_6d, hint, goal_obj_pose, obj_verts,length,seq
 
+class GazeHOIDataset_stage1_repair(data.Dataset):
+    def __init__(self, mode='stage1', datapath='/root/code/seqs/gazehoi_list_train_new.txt', split='train',hint_type='goal_pose'):
+        # super().__init__()
+        if split == 'test':
+            datapath = '/root/code/seqs/gazehoi_list_test_new.txt'
+        
+        self.root = '/root/code/seqs/1205_data/'
+        self.obj_path = '/root/code/seqs/object/'
+        with open(datapath,'r') as f:
+            info_list = f.readlines()
+        self.seqs = []
+        for info in info_list:
+            seq = info.strip()
+            self.seqs.append(seq)
+        self.global_mean = np.load('dataset/gazehoi_global_motion_6d_mean.npy')
+        self.global_std = np.load('dataset/gazehoi_global_motion_6d_std.npy')
+        self.local_mean = np.load('dataset/gazehoi_local_motion_6d_mean.npy')
+        self.local_std = np.load('dataset/gazehoi_local_motion_6d_std.npy')
+        self.hint_type = hint_type
+        # for seq in seqs:
+    
+    def __len__(self):
+        return len(self.seqs)
+
+    def __getitem__(self, index):
+        seq = self.seqs[index]
+        seq_path = join(self.root,seq)
+        meta_path = join(seq_path,'meta.pkl')
+        mano_right_path = join(seq_path, 'mano/poses_right.npy')
+        gaze_path = join(seq_path,'fake_goal.npy')
+
+        with open(meta_path,'rb')as f:
+            meta = pickle.load(f)
+        
+        active_obj = meta['active_obj']
+        obj_mesh_path = join(self.obj_path,active_obj,'simplified_scan_processed.obj')
+        obj_mesh = trimesh.load(obj_mesh_path)
+        obj_verts = np.load(join(self.obj_path,active_obj,'resampled_500_trans.npy'))
+        obj_pose = np.load(join(seq_path,active_obj+'_pose_trans.npy'))
+
+        hand_params = np.load(mano_right_path)
+        hand_pose_axis = torch.tensor(hand_params[:,:51])
+        hand_trans = hand_pose_axis[:,:3]
+        hand_theta = hand_pose_axis[:,3:]
+        mano_beta = torch.tensor(hand_params[:,51:])
+        gaze = np.load(gaze_path)
+
+        ##
+        # goal_index = meta['goal_index'] + 1 #这样能包含goal_index这一帧
+        goal_index = meta['goal_index'] 
+        goal_obj_pose = obj_pose[goal_index].reshape(3,-1) 
+        obj_verts = obj_verts @ goal_obj_pose[:3,:3].T + goal_obj_pose[:3,3].reshape(1,3)
+        goal_obj_pose_6d = matrix_to_rotation_6d(torch.tensor(goal_obj_pose[:3,:3]).unsqueeze(0)).squeeze(0).numpy()
+        # print(goal_obj_pose[:3,3].shape,goal_obj_pose_6d.shape)
+        goal_obj_pose_rot6d = np.concatenate((goal_obj_pose[:3,3],goal_obj_pose_6d))
+        # print(goal_obj_pose_rot6d.shape)
+
+        seq_length = goal_index + 1
+        length = 60
+        
+
+        """0229晚pad版本 补在后边"""
+        if goal_index <= 59:
+            pad_hand_pose_axis = hand_pose_axis[:goal_index].numpy()
+            pad_width = ((0,length-seq_length+1), (0, 0))
+            pad_hand_pose_axis = np.pad(pad_hand_pose_axis, pad_width, mode='edge')
+            pad_hand_pose_axis = torch.tensor(pad_hand_pose_axis).unsqueeze(0)
+        else:
+            pad_hand_pose_axis = hand_pose_axis[goal_index-60:goal_index].unsqueeze(0)
+            seq_length = 60
+        # print(pad_hand_pose_axis.shape)
+        # if pad_hand_pose_axis.shape[1] == 61:
+        #     print(seq,seq_length,length)
+        local_hand_pose_axis = global2local_axis_by_matrix(pad_hand_pose_axis)
+        local_hand_pose_6d = axis2rot6d(local_hand_pose_axis).squeeze(0).numpy()
+        local_hand_pose_6d = (local_hand_pose_6d - self.local_mean) / self.local_std
+
+        """
+        用mano参数做hint
+        """
+        global_hand_pose_6d = axis2rot6d(pad_hand_pose_axis).squeeze(0).numpy()
+        goal_hand_pose = global_hand_pose_6d[-1]
+        init_hand_pose = global_hand_pose_6d[0]
+        goal_hand_pose = (goal_hand_pose - self.global_mean) / self.global_std
+        init_hand_pose = (init_hand_pose - self.global_mean) / self.global_std
+        hint = np.zeros((60,99))
+        # hint[0] = init_hand_pose
+        if goal_index <59:
+            hint[goal_index] = goal_hand_pose
+        else:
+            hint[-1] = goal_hand_pose
+        # print(mano_beta)
+        
+
+        return local_hand_pose_6d, hint, init_hand_pose, goal_hand_pose, goal_obj_pose_rot6d,mano_beta.numpy()[:60], obj_verts,seq_length,seq
+        # return local_hand_pose_6d, hint, goal_obj_pose, obj_verts,length,seq
+
 class GazeHOIDataset_stage2(data.Dataset):
     def __init__(self, mode='stage1', datapath='/root/code/seqs/gazehoi_list_train_new.txt', split='train',hint_type='goal_pose'):
         if split == 'test':
@@ -973,7 +1070,6 @@ class GazeHOIDataset_stage0_1obj(data.Dataset):
             pad_width = ((0,length-num_frames), (0, 0))  # 在第一维度上填充0行，使总行数变为10
             obj_pose = np.pad(obj_pose.reshape(-1,12), pad_width, mode='edge').reshape(-1,3,4)
             gaze = np.pad(gaze.reshape(-1,3), pad_width, mode='edge')
-
 
         obj_pose = torch.tensor(obj_pose)
         obj_pose_global_6d = obj_matrix2rot6d(obj_pose.unsqueeze(0)).squeeze(0).numpy()

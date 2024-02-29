@@ -35,6 +35,9 @@ def get_dataset_class(name):
     elif name == 'gazehoi_stage1_new':
         from data_loaders.gazehoi.data.dataset import GazeHOIDataset_stage1_new
         return GazeHOIDataset_stage1_new
+    elif name == 'gazehoi_stage1_repair':
+        from data_loaders.gazehoi.data.dataset import GazeHOIDataset_stage1_repair
+        return GazeHOIDataset_stage1_repair
     elif name == 'gazehoi_stage2':
         from data_loaders.gazehoi.data.dataset import GazeHOIDataset_stage2
         return GazeHOIDataset_stage2
@@ -55,6 +58,8 @@ def get_collate_fn(name, hml_mode='train'):
         return g2m_stage1_collate
     if name == 'gazehoi_stage1_new':
         return g2m_stage1_new_collate
+    if name == 'gazehoi_stage1_repair':
+        return g2m_stage1_repair_collate
     if name == 'gazehoi_stage2':
         return g2m_stage2_collate
     if name == 'gazehoi_stage0':

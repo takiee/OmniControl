@@ -56,7 +56,7 @@ parser = argparse.ArgumentParser(description='Visualization')
 parser.add_argument('--res_path',type=str,help='result.npy path')
 parser.add_argument('--view',default=1,type=int,help='choose a camera view to render') # 1 10比较好
 parser.add_argument('--render_num',default=1,type=int,help='the number of seqs that you want to render') # 1 10比较好
-parser.add_argument('--stage',default='stage1',type=str,help='stage?') # 1 10比较好
+parser.add_argument('--stage',default='stage1_repair',type=str,help='stage?') # 1 10比较好
 
 # path = '/root/code/OmniControl/save/guide_delay1/samples_guide_delay1_000050000_seed10_predefined/results.npy'
 # path = 'save/my_omnicontrol2/samples_my_omnicontrol2_000050000_seed10_predefined/results.npy'
@@ -103,7 +103,24 @@ for i in range(pred_motion.shape[0]):
     seq_len = obj_pose.shape[0] - goal_index
     print(seq_len)
     print(args.stage)
-    if args.stage == 'stage1':
+    if args.stage == 'stage1_repair':
+        
+        if goal_index < 59:
+            obj_verts = torch.tensor(obj_verts).unsqueeze(0).repeat(goal_index,1,1).float()
+            hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[:goal_index+1]
+            obj_pose = torch.tensor(obj_pose[:goal_index]).float()
+            pred_trans = pred_motion[i,:goal_index,:3]
+            pred_theta = pred_motion[i,:goal_index,3:]
+            pred_rot = pred_motion[i,:goal_index,3:6]
+        else:
+            obj_verts = torch.tensor(obj_verts).unsqueeze(0).repeat(60,1,1).float()
+            hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[goal_index-59:goal_index+1]
+            obj_pose = torch.tensor(obj_pose[goal_index-59:goal_index+1]).float()
+            
+            pred_trans = pred_motion[i,:,:3]
+            pred_theta = pred_motion[i,:,3:]
+            pred_rot = pred_motion[i,:,3:6]
+    elif args.stage == 'stage1':
         
         if goal_index < 59:
             obj_verts = torch.tensor(obj_verts).unsqueeze(0).repeat(goal_index+1,1,1).float()

@@ -7,6 +7,7 @@ import os
 import sys
 
 import json
+print(sys.path)
 from utils.fixseed import fixseed
 from utils.parser_util import train_args
 from utils import dist_util

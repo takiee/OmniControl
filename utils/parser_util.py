@@ -102,7 +102,7 @@ def add_model_options(parser):
 
 def add_data_options(parser):
     group = parser.add_argument_group('dataset')
-    group.add_argument("--dataset", default='gazehoi_stage1', choices=['gazehoi_pretrain','gazehoi_stage0','gazehoi_stage0_1','gazehoi_stage0_1obj','gazehoi_stage0_flag','gazehoi_stage0_flag2','gazehoi_stage0_flag2_lowfps','gazehoi_stage0_flag2_lowfps_global','gazehoi_stage1','gazehoi_stage1_new', 'gazehoi_stage2'], type=str,
+    group.add_argument("--dataset", default='gazehoi_stage1', choices=['gazehoi_pretrain','gazehoi_stage0','gazehoi_stage0_1','gazehoi_stage0_1obj','gazehoi_stage0_flag','gazehoi_stage0_flag2','gazehoi_stage0_flag2_lowfps','gazehoi_stage0_flag2_lowfps_global','gazehoi_stage1','gazehoi_stage1_new', 'gazehoi_stage1_repair','gazehoi_stage2'], type=str,
                        help="Dataset name (choose from list).")
     group.add_argument("--hint_type", default='root_dis', choices=['goal_pose', 'root_dis', 'tip_dis', 'tips_closest_point','hand_T','init_pose'], type=str)
     group.add_argument("--data_dir", default="", type=str,

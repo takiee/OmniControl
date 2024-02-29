@@ -109,7 +109,7 @@ def main():
         # add CFG scale to batch
         if args.guidance_param != 1:
             model_kwargs['y']['scale'] = torch.ones(args.batch_size, device=dist_util.dev()) * args.guidance_param
-
+        length = model_kwargs['y']['lengths'].cpu()
         sample_fn = diffusion.p_sample_loop
         # print(args.batch_size, model.njoints, model.nfeats, n_frames)
         if not args.dataset.startswith('gazehoi_stage0'):
@@ -135,7 +135,8 @@ def main():
             
             # sample = sample * global_std + local_mean 
             sample = sample * local_std + local_mean 
-            sample = local2global_rot6d_by_matrix(sample)
+            sample = local2global_rot6d_by_matrix_repair(sample,length)
+            print('repair')
             sample = rot6d2axis(sample)
             # 转为绝对表示
             # sample = torch.cumsum(sample_r,dim=1)
