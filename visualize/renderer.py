@@ -103,7 +103,7 @@ class Renderer(object):
         light_z[:3, :3] = cv2.Rodrigues(np.array([-np.pi/2, 0, 0]))[0]
         scene.add(light, pose=light_z)
 
-    def render(self, data, camera, image,
+    def render(self, datas, camera, image,
         use_white=False, add_back=True,
         ret_depth=False, ret_color=False):
         # Need to flip x-axis
@@ -116,32 +116,33 @@ class Renderer(object):
         self.renderer.viewport_height = img.shape[0]
         self.renderer.viewport_width = img.shape[1]
         scene = pyrender.Scene(bg_color=self.bg_color, ambient_light=self.ambient_light)
-        vert = data['vertices'].copy()
-        faces = data['faces']
-        vert = vert @ R.T + T.T
-        if 'colors' not in data.keys():
-            # 如果使用了vid这个键，那么可视化的颜色使用vid的颜色
-            # col = get_colors(data.get('vid', 0))
-            col = (112, 128, 144)
-            mesh = trimesh.Trimesh(vert, faces, process=False)
-            mesh.apply_transform(rot)
-            material = pyrender.MetallicRoughnessMaterial(
-                metallicFactor=0.0,
-                alphaMode='OPAQUE',
-                baseColorFactor=col)
-            mesh = pyrender.Mesh.from_trimesh(
-                mesh,
-                material=material, smooth=False)
-            scene.add(mesh, data['name'])
-        else:
-            mesh = trimesh.Trimesh(vert, faces, vertex_colors=data['colors'], process=False)
-            mesh.apply_transform(rot)
-            material = pyrender.MetallicRoughnessMaterial(
-                metallicFactor=0.0,
-                alphaMode='OPAQUE',
-                baseColorFactor=(1., 1., 1.))
-            mesh = pyrender.Mesh.from_points(vert, colors = data['colors'])
-            scene.add(mesh, data['name'])
+        for data in datas:
+            vert = data['vertices'].copy()
+            faces = data['faces']
+            vert = vert @ R.T + T.T
+            if 'colors' not in data.keys():
+                # 如果使用了vid这个键，那么可视化的颜色使用vid的颜色
+                # col = get_colors(data.get('vid', 0))
+                col = (100, 150, 200)
+                mesh = trimesh.Trimesh(vert, faces, process=False)
+                mesh.apply_transform(rot)
+                material = pyrender.MetallicRoughnessMaterial(
+                    metallicFactor=0.0,
+                    alphaMode='OPAQUE',
+                    baseColorFactor=data["col_code"])
+                mesh = pyrender.Mesh.from_trimesh(
+                    mesh,
+                    material=material, smooth=False)
+                scene.add(mesh, data['name'])
+            else:
+                mesh = trimesh.Trimesh(vert, faces, vertex_colors=data['colors'], process=False)
+                mesh.apply_transform(rot)
+                material = pyrender.MetallicRoughnessMaterial(
+                    metallicFactor=0.0,
+                    alphaMode='OPAQUE',
+                    baseColorFactor=data["col_code"])
+                mesh = pyrender.Mesh.from_points(vert, colors = data['colors'])
+                scene.add(mesh, data['name'])
         camera_pose = np.eye(4)
         camera = pyrender.camera.IntrinsicsCamera(fx=K[0, 0], fy=K[1, 1], cx=K[0, 2], cy=K[1, 2])
         scene.add(camera, pose=camera_pose)

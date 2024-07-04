@@ -53,36 +53,24 @@ def img2video(image_path, video_path):
     videowriter.release()
 
 parser = argparse.ArgumentParser(description='Visualization')
-parser.add_argument('--view',default=1,type=int,help='choose a camera view to render') # 1 10比较好
+parser.add_argument('--res_path',type=str,help='result.npy path')
+parser.add_argument('--view',default=3,type=int,help='choose a camera view to render') # 1 10比较好
 parser.add_argument('--render_num',default=1,type=int,help='the number of seqs that you want to render') # 1 10比较好
+parser.add_argument('--stage',default='stage1_repair',type=str,help='stage?') # 1 10比较好
 
 # path = '/root/code/OmniControl/save/guide_delay1/samples_guide_delay1_000050000_seed10_predefined/results.npy'
 # path = 'save/my_omnicontrol2/samples_my_omnicontrol2_000050000_seed10_predefined/results.npy'
 # view = 3
 args = parser.parse_args()
-
-trainpath = '/root/code/seqs/gazehoi_list_train_new.txt'
-testpath = '/root/code/seqs/gazehoi_list_test_new.txt'
-        
-with open(trainpath,'r') as f:
-    train_list = f.readlines()
-with open(testpath,'r') as f:
-    test_list = f.readlines()
-
-valid_seqs = []
-for info in train_list:
-    seq = info.strip()
-    valid_seqs.append(seq)
-for info in test_list:
-    seq = info.strip()
-    valid_seqs.append(seq)
-
-
-path = '/root/code/OmniControl/optim/val_gaze_no_R'
+path = args.res_path
 view = args.view
 render_num = args.render_num
 
+res = np.load(path,allow_pickle=True).item()
+pred_motion = torch.tensor(res['motion'])
+seqs = res['seqs']
 datapath = '/root/code/seqs/0303_data/'
+# datapath = '/root/code/seqs/1205_data/'
 manolayer = ManoLayer(mano_assets_root='/root/code/CAMS/data/mano_assets/mano',side='right')
 hand_faces = manolayer.th_faces
 
@@ -93,11 +81,20 @@ with open(calib_path) as f:
     f.close()
 camera_pose = np.vstack((np.asarray(calib_dome[str(view)]['RT']).reshape((3,4)), np.ones(4) ))
 K = np.asarray(calib_dome[str(view)]['K']).reshape((3,3))
-
+# stage2_ok_seq = ['0009',
+#                 '0038',
+#                 '0522',
+#                 '0746',
+#                 '1059',
+#                 '1306',
+#                 '1315' # s2前半部分ok # view3 ok
+#                 ]
 seq_index = 0
-seqs = sorted(os.listdir(datapath))
-for seq in valid_seqs:
+for i in range(pred_motion.shape[0]):
+    seq = seqs[i]
     print(seq)
+    # if seq not in stage2_ok_seq:
+    #     continue
     seq_path = join(datapath,seq)
 
     meta_path = join(seq_path,'meta.pkl')
@@ -112,44 +109,37 @@ for seq in valid_seqs:
     obj_pose = np.load(join(seq_path,active_obj+'_pose_trans.npy'))
     
     goal_index = meta['goal_index']
+    pred_path = join('save/0303_stage0_1obj/samples_0303_stage0_1obj_000030000_seed10_predefined/pred_obj',f'{seq}_pred_obj_and_goal.npy') 
+    seq_res = np.load(pred_path,allow_pickle=True).item() 
+    obj_pose = torch.tensor(seq_res['pred_obj_pose']).float()
+    goal_index = seq_res['goal_index']
     
     seq_len = obj_pose.shape[0] - goal_index
     print(seq_len)
- 
-    hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[goal_index:]
-    obj_verts = torch.tensor(obj_verts).unsqueeze(0).repeat(seq_len,1,1).float()
-    obj_pose = torch.tensor(obj_pose[goal_index:]).float()
-   
-
-
-
-    # hand_params[-1,:51] = torch.tensor(res['hint'][i][0]).reshape(1,-1)
+    print(args.stage)
+    if args.stage == 'stage1_repair':
+        
+        if goal_index <= 59:
+            obj_verts = torch.tensor(obj_verts).unsqueeze(0).repeat(goal_index,1,1).float()
+            hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[:goal_index]
+            obj_pose = torch.tensor(obj_pose[:goal_index]).float()
+            pred_trans = pred_motion[i,:goal_index,:3]
+            pred_theta = pred_motion[i,:goal_index,3:]
+            pred_rot = pred_motion[i,:goal_index,3:6]
+        else:
+            obj_verts = torch.tensor(obj_verts).unsqueeze(0).repeat(60,1,1).float()
+            hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[goal_index-60:goal_index]
+            obj_pose = torch.tensor(obj_pose[goal_index-59:goal_index+1]).float()
+            
+            pred_trans = pred_motion[i,:,:3]
+            pred_theta = pred_motion[i,:,3:]
+            pred_rot = pred_motion[i,:,3:6]
 
     hand_trans = hand_params[:,:3]
     hand_rot = hand_params[:,3:6]
     hand_theta = hand_params[:,3:51]
     mano_beta = hand_params[:,51:]
 
-    pred_trans = torch.tensor(np.load(join(seq_path,'stage2_hand_T.npy')))
-    pred_theta = hand_theta[0].unsqueeze(0).repeat(seq_len,1)
-    pred_rot = hand_rot[0].unsqueeze(0).repeat(seq_len,1)
-    # pred_theta = hand_theta
-    # pred_rot = hand_rot
-
-    # print(pred_motion.shape)
-    # 倒序
-    # pred_trans = torch.flip(pred_motion[i,:goal_index+1,:3],dims=[0])
-    # pred_theta = torch.flip(pred_motion[i,:goal_index+1,3:],dims=[0])
-    # pred_rot = torch.flip(pred_motion[i,:goal_index+1,3:6],dims=[0])
-    # 正序
-    # if goal_index < 59:
-    #     pred_trans = pred_motion[i,59-goal_index:,:3]
-    #     pred_theta = pred_motion[i,59-goal_index:,3:]
-    #     pred_rot = pred_motion[i,59-goal_index:,3:6]
-    # else:
-    #     pred_trans = pred_motion[i,:,:3]
-    #     pred_theta = pred_motion[i,:,3:]
-    #     pred_rot = pred_motion[i,:,3:6]
 
     print(pred_theta.shape,mano_beta.shape)
     pred_output = manolayer(pred_theta, mano_beta)
@@ -167,7 +157,7 @@ for seq in valid_seqs:
     obj_verts = torch.einsum('fpn,fnk->fpk',obj_verts,obj_R) + obj_T
 
     # print(obj_verts.shape,mano_verts.shape)
-    render_path = path.replace('results.npy','render')
+    render_path = path.replace('results.npy','render_new1')
     print(render_path)
     render_out = join(render_path,seq,str(view))
     os.makedirs(render_out,exist_ok=True)

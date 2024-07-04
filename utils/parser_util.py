@@ -102,7 +102,7 @@ def add_model_options(parser):
 
 def add_data_options(parser):
     group = parser.add_argument_group('dataset')
-    group.add_argument("--dataset", default='gazehoi_stage1', choices=['gazehoi_pretrain','gazehoi_stage0','gazehoi_stage0_1','gazehoi_stage0_1obj','gazehoi_stage0_flag','gazehoi_stage0_flag2','gazehoi_stage0_flag2_lowfps','gazehoi_stage0_flag2_lowfps_global','gazehoi_stage1','gazehoi_stage1_new', 'gazehoi_stage1_repair','gazehoi_stage2'], type=str,
+    group.add_argument("--dataset", default='gazehoi_stage1', choices=['gazehoi_g2ho','gazehoi_o2h','gazehoi_o2h_mid','gazehoi_pretrain','gazehoi_stage0','gazehoi_stage0_1obj','gazehoi_stage0_noatt','gazehoi_stage0_norm','gazehoi_stage0_point','gazehoi_stage0_flag','gazehoi_stage0_flag2','gazehoi_stage0_flag2_lowfps','gazehoi_stage0_flag2_lowfps_global','gazehoi_stage1','gazehoi_stage1_new','gazehoi_stage1_simple', 'gazehoi_stage1_repair','gazehoi_stage2'], type=str,
                        help="Dataset name (choose from list).")
     group.add_argument("--hint_type", default='root_dis', choices=['goal_pose', 'root_dis', 'tip_dis', 'tips_closest_point','hand_T','init_pose'], type=str)
     group.add_argument("--data_dir", default="", type=str,
@@ -133,9 +133,9 @@ def add_training_options(parser):
                        help="Number of repetitions for evaluation loop during training.")
     group.add_argument("--eval_num_samples", default=1_000, type=int,
                        help="If -1, will use all samples in the specified split.")
-    group.add_argument("--log_interval", default=5000, type=int,
+    group.add_argument("--log_interval", default=200, type=int,
                        help="Log losses each N steps")
-    group.add_argument("--save_interval", default=10_000, type=int,
+    group.add_argument("--save_interval", default=20_000, type=int,
                        help="Save checkpoints and run evaluation each N steps")
     group.add_argument("--num_steps", default=600_000, type=int,
                        help="Training will stop after the specified number of steps.")
@@ -163,7 +163,7 @@ def add_sampling_options(parser):
 
 def add_generate_options(parser):
     group = parser.add_argument_group('generate')
-    group.add_argument("--motion_length", default=6.0, type=float,
+    group.add_argument("--motion_length", default=5.0, type=float,
                        help="The length of the sampled motion [in seconds]. "
                             "Maximum is 9.8 for HumanML3D (text-to-motion), and 2.0 for HumanAct12 (action-to-motion)")
     group.add_argument("--cond_mode", default='both_text_spatial', type=str,

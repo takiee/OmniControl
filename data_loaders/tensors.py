@@ -163,6 +163,58 @@ def collate_stage1_repair(batch):
     
     return motion, cond
 
+def collate_g2ho(batch):
+    notnone_batches = [b for b in batch if b is not None]
+    databatch = [b['inp'] for b in notnone_batches]
+    if 'lengths' in notnone_batches[0]:
+        lenbatch = [b['lengths'] for b in notnone_batches]
+    else:
+        lenbatch = [len(b['inp'][0][0]) for b in notnone_batches]
+
+
+    databatchTensor = collate_tensors(databatch)
+    lenbatchTensor = torch.as_tensor(lenbatch)
+    maskbatchTensor = lengths_to_mask_after(lenbatchTensor, databatchTensor.shape[-1]).unsqueeze(1).unsqueeze(1) # unqueeze for broadcasting
+
+    motion = databatchTensor
+    cond = {'y': {'mask': maskbatchTensor, 'lengths': lenbatchTensor, 'inp':databatchTensor}}
+
+
+    if 'seq_name' in notnone_batches[0]:
+        seq_name = [b['seq_name']for b in notnone_batches]
+        cond['y'].update({'seq_name': seq_name})
+    
+    if 'obj_points' in notnone_batches[0]:
+        obj_points = [b['obj_points']for b in notnone_batches]
+        cond['y'].update({'obj_points': torch.as_tensor(obj_points).float()})
+    
+    
+    if 'init_obj_pose' in notnone_batches[0] and notnone_batches[0]['init_obj_pose'] is not None:
+        init_obj_pose = [b['init_obj_pose']for b in notnone_batches]
+        cond['y'].update({'init_obj_pose': torch.as_tensor(init_obj_pose).float()})
+
+    if 'obj_pose' in notnone_batches[0] and notnone_batches[0]['obj_pose'] is not None:
+        obj_pose = [b['obj_pose']for b in notnone_batches]
+        cond['y'].update({'obj_pose': torch.as_tensor(obj_pose).float()})
+
+
+    if 'init_hand_pose' in notnone_batches[0] and notnone_batches[0]['init_hand_pose'] is not None:
+        init_hand_pose = [b['init_hand_pose']for b in notnone_batches]
+        cond['y'].update({'init_hand_pose': torch.as_tensor(init_hand_pose).float()})
+
+    if 'hand_shape' in notnone_batches[0] and notnone_batches[0]['hand_shape'] is not None:
+        hand_shape = [b['hand_shape']for b in notnone_batches]
+        cond['y'].update({'hand_shape': torch.as_tensor(hand_shape).float()})
+    
+    if 'gaze' in notnone_batches[0] and notnone_batches[0]['gaze'] is not None:
+        gaze = [b['gaze']for b in notnone_batches]
+        cond['y'].update({'gaze': torch.as_tensor(gaze).float()})
+    
+    seqbatch = [b['seq_name'] for b in notnone_batches] 
+    cond['y']['seq_name']= seqbatch
+    
+    return motion, cond
+
 def collate_stage2(batch):
     notnone_batches = [b for b in batch if b is not None]
     databatch = [b['inp'] for b in notnone_batches]
@@ -222,16 +274,44 @@ def collate_stage2(batch):
     
     return motion, cond
 
-# an adapter to our collate func
-def t2m_collate(batch):
+
+def o2h_mid_collate(batch):
     adapted_batch = [{
-        'inp': torch.tensor(b[4].T).float().unsqueeze(1), # [seqlen, J] -> [J, 1, seqlen]
-        'text': b[2], #b[0]['caption']
-        'tokens': b[6],
-        'lengths': b[5],
-        'hint': b[-1],
+        'inp': torch.tensor(b[1].T).float().unsqueeze(1), # [seqlen, J] -> [J, 1, seqlen]
+        'init_hand_pose':b[1][0],
+        'obj_pose': b[2],
+        'obj_points':b[3],
+        'hand_shape':b[-1],
+        'lengths':b[-2],
+        'seq_name':b[0]
     } for b in batch]
-    return collate(adapted_batch)
+    return collate_g2ho(adapted_batch)
+
+
+def o2h_collate(batch):
+    adapted_batch = [{
+        'inp': torch.tensor(b[0].T).float().unsqueeze(1), # [seqlen, J] -> [J, 1, seqlen]
+        'init_hand_pose':b[1],
+        'obj_pose': b[2],
+        'obj_points':b[3],
+        'hand_shape':b[4],
+        'lengths':b[-2],
+        'seq_name':b[-1]
+    } for b in batch]
+    return collate_g2ho(adapted_batch)
+
+def g2ho_collate(batch):
+    adapted_batch = [{
+        'inp': torch.tensor(b[0].T).float().unsqueeze(1), # [seqlen, J] -> [J, 1, seqlen]
+        'gaze': b[1],
+        'init_hand_pose':b[2],
+        'init_obj_pose': b[3],
+        'obj_points':b[4],
+        'hand_shape':b[5],
+        'lengths':b[-2],
+        'seq_name':b[-1]
+    } for b in batch]
+    return collate_g2ho(adapted_batch)
 
 def g2m_stage1_collate(batch):
     # print(b[0])
@@ -271,6 +351,19 @@ def g2m_stage1_repair_collate(batch):
         'lengths': b[-2],
         'obj_points':b[-3],
         'hand_shape':b[-4],
+        'seq_name':b[-1]
+    } for b in batch]
+    return collate_stage1_repair(adapted_batch)
+
+def g2m_stage1_simple_collate(batch):
+    # print(b[0])
+    adapted_batch = [{
+        'inp': torch.tensor(b[0].T).float().unsqueeze(1), # [seqlen, J] -> [J, 1, seqlen]
+        'hint': b[1],
+        'init_hand_pose':b[2],
+        'goal_hand_pose':b[3],
+        'lengths': b[-2],
+        'hand_shape':b[-3],
         'seq_name':b[-1]
     } for b in batch]
     return collate_stage1_repair(adapted_batch)
@@ -328,17 +421,6 @@ def g2m_stage0_1obj_collate(batch):
     } for b in batch]
     return collate_stage0(adapted_batch)
 
-def g2m_stage0_1_collate(batch):
-    # print(b[0])
-    adapted_batch = [{
-        'inp': torch.tensor(b[0].T).float().unsqueeze(1), # [4,nf,9] -> [nf,4,9]
-        'hint': b[1],
-        'gaze':b[2],
-        'lengths': b[-2],
-        'obj_points':b[3],
-        'seq_name':b[-1]
-    } for b in batch]
-    return collate_stage0(adapted_batch)
 
 def g2m_pretrain_collate(batch):
     # print(b[0])

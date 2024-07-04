@@ -31,7 +31,7 @@ def vis_smpl(out_path, image, nf, vertices, faces, camera_R, camera_T, K = np.ar
     camera = {"K": K,
         "R": camera_R,
         "T":camera_T}
-    from renderer_raw import Renderer
+    from renderer import Renderer
     render = Renderer(height=3840, width=2160, faces=None)
     image_vis, depth = render.render(render_data, camera, image, add_back=True)
     # print(depth)
@@ -53,34 +53,19 @@ def img2video(image_path, video_path):
     videowriter.release()
 
 parser = argparse.ArgumentParser(description='Visualization')
+parser.add_argument('--res_path',type=str,help='result.npy root path')
 parser.add_argument('--view',default=1,type=int,help='choose a camera view to render') # 1 10比较好
 parser.add_argument('--render_num',default=1,type=int,help='the number of seqs that you want to render') # 1 10比较好
+# parser.add_argument('--stage',default='stage1',type=str,help='stage?') # 1 10比较好
 
 # path = '/root/code/OmniControl/save/guide_delay1/samples_guide_delay1_000050000_seed10_predefined/results.npy'
 # path = 'save/my_omnicontrol2/samples_my_omnicontrol2_000050000_seed10_predefined/results.npy'
 # view = 3
 args = parser.parse_args()
-
-trainpath = '/root/code/seqs/gazehoi_list_train_new.txt'
-testpath = '/root/code/seqs/gazehoi_list_test_new.txt'
-        
-with open(trainpath,'r') as f:
-    train_list = f.readlines()
-with open(testpath,'r') as f:
-    test_list = f.readlines()
-
-valid_seqs = []
-for info in train_list:
-    seq = info.strip()
-    valid_seqs.append(seq)
-for info in test_list:
-    seq = info.strip()
-    valid_seqs.append(seq)
-
-
-path = '/root/code/OmniControl/optim/val_gaze_no_R'
+path = args.res_path
 view = args.view
 render_num = args.render_num
+
 
 datapath = '/root/code/seqs/0303_data/'
 manolayer = ManoLayer(mano_assets_root='/root/code/CAMS/data/mano_assets/mano',side='right')
@@ -94,9 +79,21 @@ with open(calib_path) as f:
 camera_pose = np.vstack((np.asarray(calib_dome[str(view)]['RT']).reshape((3,4)), np.ones(4) ))
 K = np.asarray(calib_dome[str(view)]['K']).reshape((3,3))
 
-seq_index = 0
-seqs = sorted(os.listdir(datapath))
-for seq in valid_seqs:
+testpath = '/root/code/seqs/gazehoi_list_test_0303.txt'
+with open(testpath,'r') as f:
+    info_list = f.readlines()
+seqs = []
+for info in info_list:
+    seq = info.strip()
+    seqs.append(seq)
+
+for seq in seqs:
+    # seq = seqs[i]
+    # res = np.load((path),allow_pickle=True).item()
+    # res = np.load(join(path,f'{seq}.npy'),allow_pickle=True).item()
+    pred_motion = torch.tensor(res['hand_motion']).cpu()
+    obj_pose = torch.tensor(res['obj_motion']).cpu()
+    seq = res['seq']
     print(seq)
     seq_path = join(datapath,seq)
 
@@ -109,32 +106,34 @@ for seq in valid_seqs:
     obj_mesh = trimesh.load(obj_mesh_path)
     obj_verts = obj_mesh.vertices
     obj_faces = obj_mesh.faces
-    obj_pose = np.load(join(seq_path,active_obj+'_pose_trans.npy'))
+    # obj_pose = np.load(join(seq_path,active_obj+'_pose_trans.npy'))
     
     goal_index = meta['goal_index']
     
-    seq_len = obj_pose.shape[0] - goal_index
+    seq_len = obj_pose.shape[0]
     print(seq_len)
- 
+    
+   
     hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[goal_index:]
     obj_verts = torch.tensor(obj_verts).unsqueeze(0).repeat(seq_len,1,1).float()
     obj_pose = torch.tensor(obj_pose[goal_index:]).float()
-   
-
+    
+    
+    pred_trans = pred_motion[:,:3]
+    pred_theta = pred_motion[:,3:51]
+    pred_rot = pred_motion[:,3:6]
+    # pred_trans = pred_motion[0,:,:3]
+    # pred_theta = pred_motion[0,:,3:51]
+    # pred_rot = pred_motion[0,:,3:6]
+    length = pred_motion.shape[0]
 
 
     # hand_params[-1,:51] = torch.tensor(res['hint'][i][0]).reshape(1,-1)
 
-    hand_trans = hand_params[:,:3]
+    hand_trans = hand_params[:,:3][-length:]
     hand_rot = hand_params[:,3:6]
     hand_theta = hand_params[:,3:51]
-    mano_beta = hand_params[:,51:]
-
-    pred_trans = torch.tensor(np.load(join(seq_path,'stage2_hand_T.npy')))
-    pred_theta = hand_theta[0].unsqueeze(0).repeat(seq_len,1)
-    pred_rot = hand_rot[0].unsqueeze(0).repeat(seq_len,1)
-    # pred_theta = hand_theta
-    # pred_rot = hand_rot
+    mano_beta = hand_params[:,51:][-length:]
 
     # print(pred_motion.shape)
     # 倒序
@@ -154,7 +153,7 @@ for seq in valid_seqs:
     print(pred_theta.shape,mano_beta.shape)
     pred_output = manolayer(pred_theta, mano_beta)
     pred_verts = pred_output.verts - pred_output.joints[:, 0].unsqueeze(1) + pred_trans.unsqueeze(1)
-    gt_output = manolayer(hand_theta, mano_beta)
+    gt_output = manolayer(hand_theta[-length:], mano_beta)
     gt_verts = gt_output.verts - gt_output.joints[:, 0].unsqueeze(1) + hand_trans.unsqueeze(1)
 
 
@@ -162,12 +161,11 @@ for seq in valid_seqs:
     obj_R = torch.einsum('...ij->...ji', [obj_R])
     obj_T = obj_pose[:,:3,3].unsqueeze(1)
     
-    
     # print(obj_verts.shape,obj_R.shape,obj_T.shape)
     obj_verts = torch.einsum('fpn,fnk->fpk',obj_verts,obj_R) + obj_T
 
     # print(obj_verts.shape,mano_verts.shape)
-    render_path = path.replace('results.npy','render')
+    render_path = path.replace('.npy','render')
     print(render_path)
     render_out = join(render_path,seq,str(view))
     os.makedirs(render_out,exist_ok=True)
@@ -180,7 +178,7 @@ for seq in valid_seqs:
         pred_img, _ = vis_smpl(render_out, img, k, pred_all_verts, faces,camera_pose[:3,:3],camera_pose[:3,3],K)
         gt_img, _ = vis_smpl(render_out, img, k, gt_all_verts, faces,camera_pose[:3,:3],camera_pose[:3,3],K)
         cv2.putText(gt_img,'Ground Truth',(100,300),cv2.FONT_HERSHEY_SIMPLEX,5,(0,0,0),20)
-        cv2.putText(pred_img,'Generation',(100,300),cv2.FONT_HERSHEY_SIMPLEX,5,(0,0,0),20)
+        cv2.putText(pred_img,'Optimization',(100,300),cv2.FONT_HERSHEY_SIMPLEX,5,(0,0,0),20)
         image_vis = cv2.hconcat([gt_img, pred_img])
         outname = os.path.join(render_out, '{:06d}.jpg'.format(k))
         cv2.imwrite(outname, image_vis)
@@ -190,9 +188,9 @@ for seq in valid_seqs:
     os.makedirs(video_path,exist_ok=True)
     video_path = join(video_path,video_name)
     img2video(render_out,video_path)
-    seq_index += 1
-    if render_num == seq_index:
-        break
+    # seq_index += 1
+    # if render_num == seq_index:
+    #     break
     # break
 
 

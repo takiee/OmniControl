@@ -1,0 +1,6 @@
+Goal MPJPE:0.007804
+Traj Error (>10cm):0.189366
+Traj Error (>20cm):0.050255
+Hand Trans Error:0.054565
+Hand Rot Error:0.324610
+MPJPE :0.020079

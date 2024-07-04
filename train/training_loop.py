@@ -178,9 +178,45 @@ class TrainLoop:
                     model_kwargs=micro_cond,
                     dataset=self.data.dataset
                 )
+            elif self.dataset == 'gazehoi_g2ho':
+                compute_losses = functools.partial(
+                    self.diffusion.training_losses_g2ho,
+                    self.ddp_model,
+                    micro,  # [bs, ch, image_size, image_size]
+                    t,  # [bs](int) sampled timesteps
+                    model_kwargs=micro_cond,
+                    dataset=self.data.dataset
+                )
+            elif self.dataset == 'gazehoi_o2h':
+                compute_losses = functools.partial(
+                    self.diffusion.training_losses_o2h,
+                    self.ddp_model,
+                    micro,  # [bs, ch, image_size, image_size]
+                    t,  # [bs](int) sampled timesteps
+                    model_kwargs=micro_cond,
+                    dataset=self.data.dataset
+                )
+            elif self.dataset == 'gazehoi_o2h_mid':
+                compute_losses = functools.partial(
+                    self.diffusion.training_losses_o2h_mid,
+                    self.ddp_model,
+                    micro,  # [bs, ch, image_size, image_size]
+                    t,  # [bs](int) sampled timesteps
+                    model_kwargs=micro_cond,
+                    dataset=self.data.dataset
+                )
             elif self.dataset == 'gazehoi_stage1_repair':
                 compute_losses = functools.partial(
                     self.diffusion.training_losses_stage1_repair,
+                    self.ddp_model,
+                    micro,  # [bs, ch, image_size, image_size]
+                    t,  # [bs](int) sampled timesteps
+                    model_kwargs=micro_cond,
+                    dataset=self.data.dataset
+                )
+            elif self.dataset == 'gazehoi_stage1_simple':
+                compute_losses = functools.partial(
+                    self.diffusion.training_losses_stage1_simple,
                     self.ddp_model,
                     micro,  # [bs, ch, image_size, image_size]
                     t,  # [bs](int) sampled timesteps
@@ -205,16 +241,7 @@ class TrainLoop:
                     model_kwargs=micro_cond,
                     dataset=self.data.dataset
                 )
-            elif self.dataset == 'gazehoi_stage0_1':
-                compute_losses = functools.partial(
-                    self.diffusion.training_losses_stage0_1,
-                    self.ddp_model,
-                    micro,  # [bs, ch, image_size, image_size]
-                    t,  # [bs](int) sampled timesteps
-                    model_kwargs=micro_cond,
-                    dataset=self.data.dataset
-                )
-            elif self.dataset == 'gazehoi_stage0_1obj':
+            elif self.dataset == 'gazehoi_stage0_1obj' or self.dataset == 'gazehoi_stage0_norm' or self.dataset == 'gazehoi_stage0_point'or self.dataset == 'gazehoi_stage0_noatt':
                 compute_losses = functools.partial(
                     self.diffusion.training_losses_stage0_1obj,
                     self.ddp_model,

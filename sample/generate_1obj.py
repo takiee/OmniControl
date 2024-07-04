@@ -23,6 +23,69 @@ from pytorch3d.transforms import rotation_6d_to_matrix,axis_angle_to_matrix,matr
 from os.path import join
 from utils.data_util import *
 import torch.nn as nn
+from pytorch3d.transforms import rotation_conversions as rc
+from tqdm import *
+
+def slerp(q0, q1, t):
+    dot = torch.dot(q0, q1)
+    if dot < 0.0:
+        q1 = -q1
+        dot = -dot
+    DOT_THRESHOLD = 0.9995
+    if dot > DOT_THRESHOLD:
+        result = q0 + t * (q1 - q0)
+        return result / result.norm()
+    theta_0 = dot.acos()
+    sin_theta_0 = theta_0.sin()
+    theta = theta_0 * t
+    sin_theta = theta.sin()
+    s0 = ((1.0 - t) * theta).cos()
+    s1 = sin_theta / sin_theta_0
+    return (s0 * q0) + (s1 * q1)
+
+def interpolate_rotations_and_translations(rot_matrices, translations, timestamps_original, timestamps_target):
+    # 将旋转矩阵转换为四元数
+    quaternions = rc.matrix_to_quaternion(rot_matrices)
+    
+    # 插值结果容器
+    quaternions_interpolated = []
+    translations_interpolated = []
+
+    for i in range(len(timestamps_target)):
+        # 计算当前目标时间戳在原始时间戳的位置
+        t_norm = timestamps_target[i] * (len(timestamps_original) - 1)
+        idx = int(t_norm)
+        t = t_norm - idx
+
+        if idx < len(timestamps_original) - 1:
+            # 对四元数进行SLERP插值
+            q_interp = slerp(quaternions[idx], quaternions[idx + 1], t)
+            quaternions_interpolated.append(q_interp)
+
+            # 对平移向量进行线性插值
+            trans_interp = (1 - t) * translations[idx] + t * translations[idx + 1]
+            translations_interpolated.append(trans_interp)
+        else:
+            # 直接使用最后一个四元数和平移向量
+            quaternions_interpolated.append(quaternions[-1])
+            translations_interpolated.append(translations[-1])
+
+    # 将插值后的四元数转换回旋转矩阵
+    quaternions_interpolated = torch.stack(quaternions_interpolated)
+    rot_matrices_interpolated = rc.quaternion_to_matrix(quaternions_interpolated)
+    
+    # 将插值后的平移向量转换为合适的形式
+    translations_interpolated = torch.stack(translations_interpolated)
+
+    return rot_matrices_interpolated, translations_interpolated
+def get_new_obj_verts(obj_pose,obj_verts):
+    # nf,3,4 , nf,N,3
+    obj_R = obj_pose[:,:3,:3]
+    obj_R = torch.einsum('...ij->...ji', [obj_R])
+    obj_T = obj_pose[:,:3,3].unsqueeze(1)
+    # print(obj_verts.shape,obj_R.shape,obj_T.shape)
+    new_obj_verts = torch.einsum('fpn,fnk->fpk',obj_verts,obj_R) + obj_T
+    return new_obj_verts
 
 def main():
     args = generate_args()
@@ -39,7 +102,7 @@ def main():
         n_frames = 60
     elif args.dataset == 'gazehoi_stage2':
         n_frames = 180
-    elif args.dataset == 'gazehoi_stage0_flag2_lowfps' or args.dataset == 'gazehoi_stage0_flag2_lowfps_global' or args.dataset == 'gazehoi_stage0_1obj':
+    elif args.dataset == args.dataset == 'gazehoi_stage0_1obj' or args.dataset == 'gazehoi_stage0_norm' or args.dataset == 'gazehoi_stage0_point' or args.dataset == 'gazehoi_stage0_noatt':
         n_frames = 69
     elif args.dataset.startswith('gazehoi_stage0'):
         n_frames = 345
@@ -112,7 +175,7 @@ def main():
 
         sample_fn = diffusion.p_sample_loop
         # print(args.batch_size, model.njoints, model.nfeats, n_frames)
-        if args.dataset == 'gazehoi_stage0_1obj':
+        if args.dataset == 'gazehoi_stage0_1obj'or args.dataset == 'gazehoi_stage0_noatt' or args.dataset == 'gazehoi_stage0_norm' or args.dataset == 'gazehoi_stage0_point':
             sample = sample_fn(
                 model,
                 (args.batch_size, model.njoints, model.nfeats, n_frames),
@@ -170,128 +233,164 @@ def main():
            'all_gt':all_gt})
 
         
-    # res_save_path = join(out_path, 'eval_results.txt')
-    # all_motions = torch.tensor(all_motions)
-    # all_hint = torch.tensor(all_hint)
-    # stage1_eval(all_motions, all_hint, all_seqs, res_save_path)
-    # # vis_gen(all_motions,all_seqs,res_save_path,vis_num)
+    res_save_path = join(out_path, 'stage0_eval_results.txt')
+    pred_motion = torch.tensor(all_motions)
+    seqs = all_seqs
+    bs = pred_motion.shape[0]
+    timestamps_original = np.linspace(0, 1, 69)
+    timestamps_target = np.linspace(0, 1, 345)
+    all_motion = []
+    for i in range(bs):
+        motion = pred_motion[i]
+        rot_matrices = motion[:,:3,:3]
+        translations = motion[:,:3,3]
+        rot_matrices_interpolated, translations_interpolated = interpolate_rotations_and_translations(
+                                    rot_matrices, translations, timestamps_original, timestamps_target)
+        motion_inter = torch.cat([rot_matrices_interpolated, translations_interpolated.unsqueeze(-1)],dim=-1)
+        motion_inter = motion_inter.unsqueeze(0).numpy()
+        all_motion.append(motion_inter)
 
-    # abs_path = os.path.abspath(out_path)
-    # print(f'[Done] Results are at [{abs_path}]')
+    all_motion_inter = np.concatenate(all_motion, axis=0)
+    print(all_motion_inter.shape)
 
-def cal_goal_err(x, hint):
-    """
-    每个joints的平均偏差?
-    """
-    mask_hint = hint.view(hint.shape[0], hint.shape[1], -1).sum(dim=-1, keepdim=True) != 0
-    x_ = x
-    bs,nf,_ = x_.shape
-    loss = torch.norm((x_.reshape(bs,nf,-1) - hint.reshape(bs,nf,-1)) * mask_hint, dim=-1)
-    # print(loss[:,0])
-    # loss = loss[:,0] # bs,17
-    # loss = torch.sum(loss) / bs
-    loss = torch.mean(loss)
-    return loss
+    gt_path = '/root/code/seqs/0303_data/'
+    all_smooth_motion = []
+    all_goal_index = []
+    all_mpvpe_global = 0
+    all_final_loc = 0
 
-def stage1_eval(pred_motion, all_hint, all_seqs, res_save_path):
-    pred_motion = pred_motion
-    hint = all_hint
-    goal_err = cal_goal_err(pred_motion,hint)
+    all_mpjpe_local = 0
+    all_goal_mpjpe = 0
 
-    num_samples = pred_motion.shape[0]
-
-
-    datapath = '/root/code/seqs/1205_data/'
-    manolayer = ManoLayer(mano_assets_root='/root/code/CAMS/data/mano_assets/mano',side='right')
-    obj_path = '/root/code/seqs/object/'
-
-    total_hand_T_error = 0
-    total_hand_R_error = 0
-    total_mpjpe = 0 # root-relative
-    total_traj_invalid_10 = 0
-    total_traj_invalid_20 = 0
+    all_traj = 0
     total_traj_num = 0
-    total_hand_R_error = 0
-
-    for i in range(pred_motion.shape[0]):
-        seq = all_seqs[i]
-        seq_path = join(datapath,seq)
-
-        meta_path = join(seq_path,'meta.pkl')
+    contact_num = 0
+    pene_num = 0
+    T_error = 0
+    R_error = 0
+    num_samples =0
+    for i in tqdm(range(len(seqs))):
+        seq = seqs[i]
+        # if seq != '0535':
+        #     continue
+        # print(seq)
+        gt_seq_path = join(gt_path,seq)
+        gaze = np.load(join(gt_seq_path,'gaze_point.npy'))
+        seq_len = gaze.shape[0]
+        meta_path = join(gt_seq_path,'meta.pkl')
         with open(meta_path,'rb')as f:
             meta = pickle.load(f)
-            
+        gaze_obj = meta['gaze_obj']
         active_obj = meta['active_obj']
-        obj_pose = np.load(join(seq_path,active_obj+'_pose_trans.npy'))
+        gaze = np.load(join(gt_seq_path,'fake_goal.npy'))
+        num_frames = gaze.shape[0]
+
+        gt_init_obj_pose = torch.tensor(np.load(join(gt_seq_path,gaze_obj+'_pose_trans.npy')).reshape(-1,3,4)[0])
         
-        goal_index = meta['goal_index']
-        obj_pose = torch.tensor(obj_pose[:goal_index+1]).float()
+        motion_inter_i = torch.tensor(all_motion_inter[i,:seq_len])
+        motion_inter_T = motion_inter_i[:,:3,3]
+        vel = torch.norm(motion_inter_T[11:] - motion_inter_T[10:-1],dim=-1)
+        goal_index = torch.nonzero(vel > 5e-4)[0].item() + 10
+        pred_init10_obj_pose = motion_inter_i[goal_index+10]
+        interval = 10
+        timestamps_original = np.linspace(0, 1, 2)
+        timestamps_target = np.linspace(0, 1, 10)
 
-        if goal_index < 59:
-            hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[:goal_index+1]
+        new_motion = torch.cat((gt_init_obj_pose.unsqueeze(0),pred_init10_obj_pose.unsqueeze(0)),dim=0)
+        rot_matrices = new_motion[:,:3,:3]
+        translations = new_motion[:,:3,3]
+        rot_matrices_interpolated, translations_interpolated = interpolate_rotations_and_translations(
+                                    rot_matrices, translations, timestamps_original, timestamps_target)
+        motion_10 = torch.cat([rot_matrices_interpolated, translations_interpolated.unsqueeze(-1)],dim=-1)
+        motion_inter_i[goal_index:goal_index+10] = motion_10
+        motion_inter_i[:goal_index] = gt_init_obj_pose
+        pred_path = join(out_path,'pred_obj')
+        os.makedirs(pred_path,exist_ok=True)
+        output_path = join(pred_path,f'{seq}_pred_obj_and_goal.npy')
+        # output_path = join(gt_seq_path,'pred_obj_and_goal.npy')
+        np.save(output_path,{'pred_obj_pose':motion_inter_i.numpy(),'goal_index':goal_index,'seqs':seqs})
+
+
+        if gaze_obj == active_obj:
+            gt_pose = torch.tensor(np.load(join(gt_seq_path,active_obj+'_pose_trans.npy')).reshape(-1,3,4))
+            pred_pose = torch.tensor(all_motion_inter[i,:num_frames])
+            gt_T = gt_pose[:,:3,3]
+            pred_T = pred_pose[:,:3,3]
+            T_error += torch.mean(torch.norm(gt_T - pred_T,p=2,dim=-1))
+
+            gt_R = gt_pose[:,:3,:3]
+            pred_R = pred_pose[:,:3,:3]
+            gt_R = torch.einsum('...ij->...ji', [gt_R])
+            hand_R_error = (torch.einsum('fpn,fnk->fpk',gt_R,pred_R) - torch.eye(3).unsqueeze(0).repeat(gt_R.shape[0],1,1)).reshape(-1,9) # nf,3,3
+            hand_R_error =  torch.mean(torch.norm(hand_R_error,dim=-1))
+            R_error += hand_R_error 
+
+            
         else:
-            hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[goal_index-59:goal_index+1]
+            obj_name_list = meta['obj_name_list']
+            for obj in obj_name_list:
+                gt_pose = torch.tensor(np.load(join(gt_seq_path,obj+'_pose_trans.npy')).reshape(-1,3,4))
+                if obj == gaze_obj:
+                    pred_pose = torch.tensor(all_motion_inter[i,:num_frames])
+                else:
+                    pred_pose = gt_pose[0].unsqueeze(0).repeat(num_frames,1,1)
+                    # print(pred_pose.shape)
 
-        hand_trans = hand_params[:,:3]
-        hand_rot = hand_params[:,3:6]
-        hand_theta = hand_params[:,3:51]
-        mano_beta = hand_params[:,51:]
+                gt_T = gt_pose[:,:3,3]
+                pred_T = pred_pose[:,:3,3]
+                T_error += torch.mean(torch.norm(gt_T - pred_T,p=2,dim=-1))
 
-        ## 倒序
-        # pred_trans = torch.flip(pred_motion[i,:goal_index+1,:3],dims=[0])
-        # pred_theta = torch.flip(pred_motion[i,:goal_index+1,3:],dims=[0])
-        # pred_rot = torch.flip(pred_motion[i,:goal_index+1,3:6],dims=[0])
+                gt_R = gt_pose[:,:3,:3]
+                pred_R = pred_pose[:,:3,:3]
+                gt_R = torch.einsum('...ij->...ji', [gt_R])
+                hand_R_error = (torch.einsum('fpn,fnk->fpk',gt_R,pred_R) - torch.eye(3).unsqueeze(0).repeat(gt_R.shape[0],1,1)).reshape(-1,9) # nf,3,3
+                hand_R_error =  torch.mean(torch.norm(hand_R_error,dim=-1))
+                R_error += hand_R_error 
+        
+        gt_obj_verts = torch.tensor(np.load(join('/root/code/seqs/object/',active_obj,'resampled_500_trans.npy'))).unsqueeze(0).repeat(seq_len,1,1).float()
+        pred_obj_verts = torch.tensor(np.load(join('/root/code/seqs/object/',gaze_obj,'resampled_500_trans.npy'))).unsqueeze(0).repeat(seq_len,1,1).float()
+        gt_obj_pose = torch.tensor(np.load(join(gt_seq_path,active_obj+'_pose_trans.npy')).reshape(-1,3,4)).float()
+        pred_obj_pose = torch.tensor(all_motion_inter[i][:seq_len]).float()
+        gt_obj_verts = get_new_obj_verts(gt_obj_pose,gt_obj_verts)
+        pred_obj_verts = get_new_obj_verts(pred_obj_pose,pred_obj_verts) # nf,N,3
 
-        ## 正序
-        if goal_index < 59:
-            pred_trans = pred_motion[i,59-goal_index:,:3]
-            pred_theta = pred_motion[i,59-goal_index:,3:]
-            pred_rot = pred_motion[i,59-goal_index:,3:6]
-        else:
-            pred_trans = pred_motion[i,:,:3]
-            pred_theta = pred_motion[i,:,3:]
-            pred_rot = pred_motion[i,:,3:6]
+        mpvpe = torch.mean(torch.norm(gt_obj_verts-pred_obj_verts,dim=-1))
+        all_mpvpe_global += mpvpe
 
-        # print(goal_index,pred_theta.shape, mano_beta.shape)
-        pred_output = manolayer(pred_theta, mano_beta)
-        # 相对表示
-        pred_joints = pred_output.joints - pred_output.joints[:, 0].unsqueeze(1)
-        gt_output = manolayer(hand_theta, mano_beta)
-        # 相对表示
-        gt_joints = gt_output.joints - gt_output.joints[:, 0].unsqueeze(1)
-        mpjpe = torch.sum(torch.norm(pred_joints - gt_joints, dim=-1)) / (hand_trans.shape[0] * 21)
-        total_mpjpe += mpjpe
+        gt_final_T = gt_obj_pose[-1][:3,3]
+        pred_final_T = pred_obj_pose[-1][:3,3]
+        final_loc = torch.norm(gt_final_T - pred_final_T)
+        all_final_loc += final_loc
 
-        hand_T_error = torch.sum(torch.norm(hand_trans-pred_trans,p=2,dim=-1)) / hand_trans.shape[0]
-        total_hand_T_error += hand_T_error
+        obj_traj_error = torch.norm(gt_obj_pose[:,:3,3]-pred_obj_pose[:,:3,3],p=2,dim=1) 
+        traj_invalid_10 = torch.sum(obj_traj_error > 0.1)
+        all_traj += traj_invalid_10
+        total_traj_num += obj_traj_error.shape[0]
 
-        hand_rot = axis_angle_to_matrix(hand_rot)
-        pred_rot = axis_angle_to_matrix(pred_rot)
-        hand_rot = torch.einsum('...ij->...ji', [hand_rot])
-        hand_R_error = (torch.einsum('fpn,fnk->fpk',hand_rot,pred_rot) - torch.eye(3).unsqueeze(0).repeat(hand_rot.shape[0],1,1)).reshape(-1,9) # nf,3,3
-        hand_R_error =  torch.sum(torch.norm(hand_R_error,dim=-1)) /hand_trans.shape[0]
-        total_hand_R_error += hand_R_error
+    traj_err_10 = (all_traj/total_traj_num).numpy()
+    contact = (contact_num/total_traj_num)
+    pene = (pene_num/total_traj_num)
+    num_samples = 130
+    mpjpe = (all_mpjpe_local/num_samples)
+    mpvpe = (all_mpvpe_global/num_samples)
+    final_loc = (all_final_loc/num_samples)
+    goal_mpjpe = (all_goal_mpjpe/num_samples)
+    # mpjpe = (all_mpjpe_local/num_samples).numpy()
+    # mpvpe = (all_mpvpe_global/num_samples).numpy()
+    # final_loc = (all_final_loc/num_samples).numpy()
+    # goal_mpjpe = (all_goal_mpjpe/num_samples).numpy()
 
-        traj_error = torch.norm(hand_trans-pred_trans,p=2,dim=1) 
-        traj_invalid_10 = torch.sum(traj_error > 0.1)
-        traj_invalid_20 = torch.sum(traj_error > 0.2)
-        total_traj_invalid_10 += traj_invalid_10
-        total_traj_invalid_20 += traj_invalid_20
-        total_traj_num += traj_error.shape[0]
-    
-    goal_err = goal_err.numpy()
-    traj_err_10 = (total_traj_invalid_10/total_traj_num).numpy()
-    traj_err_20 = (total_traj_invalid_20/total_traj_num).numpy()
-    hand_T_err = (total_hand_T_error/num_samples).numpy()
-    hand_R_err = (total_hand_R_error/num_samples).numpy()
-    mpjpe = (total_mpjpe/num_samples).numpy()
+
+
+    print(T_error / len(seqs))
+    print(R_error / len(seqs))
+
     with open(res_save_path, 'w') as f:
-        f.write(f'Goal Error:{goal_err:.6f}\n')
+        # f.write(f'Goal goal_mpjpe Error:{goal_mpjpe:.6f}\n')
         f.write(f'Traj Error (<10cm):{traj_err_10:.6f}\n')
-        f.write(f'Traj Error (<20cm):{traj_err_20:.6f}\n')
-        f.write(f'Hand Trans Error:{hand_T_err:.6f}\n')
-        f.write(f'Hand Rot Error:{hand_R_err:.6f}\n')
-        f.write(f'MPJPE :{mpjpe:.6f}\n')
+        # f.write(f'Traj Error (<20cm):{traj_err_20:.6f}\n')
+        f.write(f'final_loc:{final_loc:.6f}\n')
+        f.write(f'mpvpe:{mpvpe:.6f}\n')
 
 
 

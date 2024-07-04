@@ -31,7 +31,7 @@ def vis_smpl(out_path, image, nf, vertices, faces, camera_R, camera_T, K = np.ar
     camera = {"K": K,
         "R": camera_R,
         "T":camera_T}
-    from renderer import Renderer
+    from renderer_raw import Renderer
     render = Renderer(height=3840, width=2160, faces=None)
     image_vis, depth = render.render(render_data, camera, image, add_back=True)
     # print(depth)
@@ -54,7 +54,7 @@ def img2video(image_path, video_path):
 
 parser = argparse.ArgumentParser(description='Visualization')
 parser.add_argument('--res_path',type=str,help='result.npy path')
-parser.add_argument('--view',default=1,type=int,help='choose a camera view to render') # 1 10比较好
+parser.add_argument('--view',default=3,type=int,help='choose a camera view to render') # 1 10比较好
 parser.add_argument('--render_num',default=1,type=int,help='the number of seqs that you want to render') # 1 10比较好
 parser.add_argument('--stage',default='stage1_repair',type=str,help='stage?') # 1 10比较好
 
@@ -69,7 +69,8 @@ render_num = args.render_num
 res = np.load(path,allow_pickle=True).item()
 pred_motion = torch.tensor(res['motion'])
 seqs = res['seqs']
-datapath = '/root/code/seqs/1205_data/'
+datapath = '/root/code/seqs/0303_data/'
+# datapath = '/root/code/seqs/1205_data/'
 manolayer = ManoLayer(mano_assets_root='/root/code/CAMS/data/mano_assets/mano',side='right')
 hand_faces = manolayer.th_faces
 
@@ -80,11 +81,20 @@ with open(calib_path) as f:
     f.close()
 camera_pose = np.vstack((np.asarray(calib_dome[str(view)]['RT']).reshape((3,4)), np.ones(4) ))
 K = np.asarray(calib_dome[str(view)]['K']).reshape((3,3))
-
+# stage2_ok_seq = ['0009',
+#                 '0038',
+#                 '0522',
+#                 '0746',
+#                 '1059',
+#                 '1306',
+#                 '1315' # s2前半部分ok # view3 ok
+#                 ]
 seq_index = 0
 for i in range(pred_motion.shape[0]):
     seq = seqs[i]
     print(seq)
+    # if seq not in stage2_ok_seq:
+    #     continue
     seq_path = join(datapath,seq)
 
     meta_path = join(seq_path,'meta.pkl')
@@ -105,54 +115,54 @@ for i in range(pred_motion.shape[0]):
     print(args.stage)
     if args.stage == 'stage1_repair':
         
-        if goal_index < 59:
+        if goal_index <= 59:
             obj_verts = torch.tensor(obj_verts).unsqueeze(0).repeat(goal_index,1,1).float()
-            hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[:goal_index+1]
+            hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[:goal_index]
             obj_pose = torch.tensor(obj_pose[:goal_index]).float()
             pred_trans = pred_motion[i,:goal_index,:3]
             pred_theta = pred_motion[i,:goal_index,3:]
             pred_rot = pred_motion[i,:goal_index,3:6]
         else:
             obj_verts = torch.tensor(obj_verts).unsqueeze(0).repeat(60,1,1).float()
-            hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[goal_index-59:goal_index+1]
+            hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[goal_index-60:goal_index]
             obj_pose = torch.tensor(obj_pose[goal_index-59:goal_index+1]).float()
             
             pred_trans = pred_motion[i,:,:3]
             pred_theta = pred_motion[i,:,3:]
             pred_rot = pred_motion[i,:,3:6]
-    elif args.stage == 'stage1':
+    # elif args.stage == 'stage1':
         
-        if goal_index < 59:
-            obj_verts = torch.tensor(obj_verts).unsqueeze(0).repeat(goal_index+1,1,1).float()
-            hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[:goal_index+1]
-            obj_pose = torch.tensor(obj_pose[:goal_index+1]).float()
-            pred_trans = pred_motion[i,59-goal_index:,:3]
-            pred_theta = pred_motion[i,59-goal_index:,3:]
-            pred_rot = pred_motion[i,59-goal_index:,3:6]
-        else:
-            obj_verts = torch.tensor(obj_verts).unsqueeze(0).repeat(60,1,1).float()
-            hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[goal_index-59:goal_index+1]
-            obj_pose = torch.tensor(obj_pose[goal_index-59:goal_index+1]).float()
+    #     if goal_index < 59:
+    #         obj_verts = torch.tensor(obj_verts).unsqueeze(0).repeat(goal_index+1,1,1).float()
+    #         hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[:goal_index+1]
+    #         obj_pose = torch.tensor(obj_pose[:goal_index+1]).float()
+    #         pred_trans = pred_motion[i,59-goal_index:,:3]
+    #         pred_theta = pred_motion[i,59-goal_index:,3:]
+    #         pred_rot = pred_motion[i,59-goal_index:,3:6]
+    #     else:
+    #         obj_verts = torch.tensor(obj_verts).unsqueeze(0).repeat(60,1,1).float()
+    #         hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[goal_index-59:goal_index+1]
+    #         obj_pose = torch.tensor(obj_pose[goal_index-59:goal_index+1]).float()
             
-            pred_trans = pred_motion[i,:,:3]
-            pred_theta = pred_motion[i,:,3:]
-            pred_rot = pred_motion[i,:,3:6]
-    elif args.stage == 'stage2':
-        length = 180
-        if seq_len <= length:
-            hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[goal_index:]
-            obj_verts = torch.tensor(obj_verts).unsqueeze(0).repeat(seq_len,1,1).float()
-            obj_pose = torch.tensor(obj_pose[goal_index:]).float()
-            pred_trans = pred_motion[i,length-seq_len:,:3]
-            pred_theta = pred_motion[i,length-seq_len:,3:]
-            pred_rot = pred_motion[i,length-seq_len:,3:6]
-        else:
-            hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[goal_index:goal_index+length]
-            obj_verts = torch.tensor(obj_verts).unsqueeze(0).repeat(length,1,1).float()
-            obj_pose = torch.tensor(obj_pose[goal_index:goal_index+length]).float()
-            pred_trans = pred_motion[i,:,:3]
-            pred_theta = pred_motion[i,:,3:]
-            pred_rot = pred_motion[i,:,3:6]
+    #         pred_trans = pred_motion[i,:,:3]
+    #         pred_theta = pred_motion[i,:,3:]
+    #         pred_rot = pred_motion[i,:,3:6]
+    # elif args.stage == 'stage2':
+    #     length = 180
+    #     if seq_len <= length:
+    #         hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[goal_index:]
+    #         obj_verts = torch.tensor(obj_verts).unsqueeze(0).repeat(seq_len,1,1).float()
+    #         obj_pose = torch.tensor(obj_pose[goal_index:]).float()
+    #         pred_trans = pred_motion[i,length-seq_len:,:3]
+    #         pred_theta = pred_motion[i,length-seq_len:,3:]
+    #         pred_rot = pred_motion[i,length-seq_len:,3:6]
+    #     else:
+    #         hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[goal_index:goal_index+length]
+    #         obj_verts = torch.tensor(obj_verts).unsqueeze(0).repeat(length,1,1).float()
+    #         obj_pose = torch.tensor(obj_pose[goal_index:goal_index+length]).float()
+    #         pred_trans = pred_motion[i,:,:3]
+    #         pred_theta = pred_motion[i,:,3:]
+    #         pred_rot = pred_motion[i,:,3:6]
 
 
     # hand_params[-1,:51] = torch.tensor(res['hint'][i][0]).reshape(1,-1)
@@ -177,7 +187,7 @@ for i in range(pred_motion.shape[0]):
     #     pred_theta = pred_motion[i,:,3:]
     #     pred_rot = pred_motion[i,:,3:6]
 
-    # print(pred_theta.shape,mano_beta.shape)
+    print(pred_theta.shape,mano_beta.shape)
     pred_output = manolayer(pred_theta, mano_beta)
     pred_verts = pred_output.verts - pred_output.joints[:, 0].unsqueeze(1) + pred_trans.unsqueeze(1)
     gt_output = manolayer(hand_theta, mano_beta)
@@ -193,7 +203,7 @@ for i in range(pred_motion.shape[0]):
     obj_verts = torch.einsum('fpn,fnk->fpk',obj_verts,obj_R) + obj_T
 
     # print(obj_verts.shape,mano_verts.shape)
-    render_path = path.replace('results.npy','render')
+    render_path = path.replace('results.npy','render_filter_byview3')
     print(render_path)
     render_out = join(render_path,seq,str(view))
     os.makedirs(render_out,exist_ok=True)

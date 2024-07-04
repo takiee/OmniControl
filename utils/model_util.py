@@ -1,5 +1,6 @@
 # This code is based on https://github.com/GuyTevet/motion-diffusion-model
 from model.cmdm import CMDM
+# from diffusion import gaussian_diffusion_ylx as gd
 from diffusion import gaussian_diffusion as gd
 from diffusion.respace import SpacedDiffusion, space_timesteps
 
@@ -42,7 +43,7 @@ def get_model_args(args, data):
         njoints = 251
         nfeats = 1
     # elif args.dataset == 'gazehoi_stage1' or args.dataset == 'gazehoi_stage2' :
-    elif args.dataset == 'gazehoi_stage1' or args.dataset == 'gazehoi_stage2' or args.dataset == 'gazehoi_stage1_new' or args.dataset == 'gazehoi_stage1_repair':
+    elif args.dataset == 'gazehoi_stage1' or args.dataset == 'gazehoi_stage2' or args.dataset == 'gazehoi_stage1_new' or args.dataset == 'gazehoi_stage1_repair' or args.dataset == 'gazehoi_stage1_simple':
         # print('gazehoi!!')
         data_rep = 'rot6d'
         # njoints = 51
@@ -88,7 +89,7 @@ def get_model_args(args, data):
         length = 69
         if args.hint_type == 'init_pose':
             hint_dim = 36 # 4*9
-    elif args.dataset == 'gazehoi_stage0_1obj':
+    elif args.dataset == 'gazehoi_stage0_1obj' or args.dataset == 'gazehoi_stage0_norm' or args.dataset == 'gazehoi_stage0_point'  or args.dataset == 'gazehoi_stage0_noatt':
         # print('gazehoi!!')
         data_rep = 'rot6d'
         # njoints = 51
@@ -98,16 +99,33 @@ def get_model_args(args, data):
         length = 69
         if args.hint_type == 'init_pose':
             hint_dim = 9 # 4*9
-    elif args.dataset == 'gazehoi_stage0_1' :
-        # print('gazehoi!!')
+    elif args.dataset == 'gazehoi_g2ho':
+        print('gazehoi__g2ho!!')
         data_rep = 'rot6d'
         # njoints = 51
-        njoints = 9
+        njoints = 99+9
         nfeats = 1
-        length = 345
         args.latent_dim = 128
-        if args.hint_type == 'init_pose':
-            hint_dim = 9 # 4*9
+        length = 345
+        hint_dim = None
+    elif args.dataset == 'gazehoi_o2h':
+        print('gazehoi__o2h!!')
+        data_rep = 'rot6d'
+        # njoints = 51
+        njoints = 99
+        nfeats = 1
+        args.latent_dim = 128
+        length = 345
+        hint_dim = None
+    elif args.dataset == 'gazehoi_o2h_mid':
+        print('gazehoi__o2h_mid!!')
+        data_rep = 'mid'
+        # njoints = 51
+        njoints = 291
+        nfeats = 1
+        args.latent_dim = 256
+        length = 30
+        hint_dim = None
 
     return {'modeltype': '', 'njoints': njoints, 'nfeats': nfeats, 'num_actions': num_actions,
             'translation': True, 'pose_rep': 'rot6d', 'glob': True, 'glob_rot': True,

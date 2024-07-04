@@ -241,14 +241,13 @@ class GaussianDiffusion:
             self.obj_global_std = torch.from_numpy(np.load('dataset/gazehoi_global_obj_std.npy')).reshape(1,-1).repeat(4,1).reshape(1,-1)
             self.obj_local_mean = torch.from_numpy(np.load('dataset/gazehoi_local_obj_mean.npy')).reshape(1,-1).repeat(4,1).reshape(1,-1)
             self.obj_local_std = torch.from_numpy(np.load('dataset/gazehoi_local_obj_std.npy')).reshape(1,-1).repeat(4,1).reshape(1,-1)
-        elif  dataset == 'gazehoi_stage0_1obj' or dataset == 'gazehoi_stage0_norm' or dataset == 'gazehoi_stage0_point' or dataset == 'gazehoi_stage0_noatt':
+        elif  dataset == 'gazehoi_stage0_1obj' or dataset == 'gazehoi_stage0_norm' or dataset == 'gazehoi_stage0_point':
             self.obj_global_mean = torch.from_numpy(np.load('dataset/gazehoi_global_obj_mean.npy'))
             self.obj_global_std = torch.from_numpy(np.load('dataset/gazehoi_global_obj_std.npy'))
             self.obj_local_mean = torch.from_numpy(np.load('dataset/gazehoi_local_obj_mean.npy'))
             self.obj_local_std = torch.from_numpy(np.load('dataset/gazehoi_local_obj_std.npy'))
         else:
-            # raise NotImplementedError('Dataset not recognized!!')
-            print('no need guide')
+            raise NotImplementedError('Dataset not recognized!!')
         
         self.manolayer = ManoLayer(mano_assets_root='/root/code/CAMS/data/mano_assets/mano',side='right').cuda()
         # self.manolayer = ManoLayer(mano_assets_root='/root/code/CAMS/data/mano_assets/mano',side='right',cuda=True)
@@ -481,70 +480,51 @@ class GaussianDiffusion:
         )
         return new_mean
 
-    def gradients_new(self, x, hint, hand_shape,mask_hint,mask, joint_ids=None):
-        with torch.enable_grad():
-            x.requires_grad_(True)
-            
-            # loss1 = self.masked_l2(x[:,:9], torch.zeros_like(x[:,:9]),mask) 
-            # print('1',loss1.shape)
-            x_ = x.permute(0, 3, 2, 1).contiguous()
-            x_ = x_.squeeze(2)
-            # x_ = x_ * self.global_std + self.local_mean
-            x_ = x_ * self.local_std + self.local_mean
-            x_ = local2global_axis_by_matrix(x_)
-            bs,nf,_ = x_.shape
-            hand_theta = x_[:,:,3:].reshape(-1,48).contiguous()
-            hand_trans = x_[:,:,:3].reshape(-1,3).contiguous()
-            hand_shape = hand_shape.reshape(-1,10).contiguous()
-            # print(hand_theta.device, hand_shape.device)
-            mano_output = manolayer(hand_theta, hand_shape)
-            # print(mano_output.joints.shape)
-            mano_joints = mano_output.joints - mano_output.joints[:,0].unsqueeze(1) + hand_trans.unsqueeze(1) 
-            # print(mano_joints.shape)
-            mano_joints = mano_joints.reshape(bs,-1,21,3)
-            # print(mano_joints.shape)
+    def gradients(self, out, x_prev, hint, mask_hint, length):
+        mask_hint_new = mask_hint.clone()
+        mask_hint_new = torch.where(mask_hint_new, 1.0, 0.0).to(torch.float32)
+        # mask_hint_new[:,55:,:] = 1.0
+        # print(f'mask_hint_new:\n {mask_hint_new[0]}')
+        mask_hint_new = mask_hint_new.repeat(1, 1, 99)
 
+        # with torch.enable_grad():
+        x_0_pred = out['pred_xstart']
+        # x_t.requires_grad_(True)
 
-            loss2 = torch.sum(torch.norm((mano_joints - hint) * mask_hint, dim=-1),dim=-1)
-            # print('2',loss2.shape)
-            # print(torch.mean(loss1),torch.mean(loss2))
-            # print(loss.shape)
-            # torch.autograd.set_detect_anomaly(True)
-            loss = loss2
-            # loss = loss1 * 0.01 + loss2
-            grad = torch.autograd.grad([loss.sum()], [x])[0]
-            # print(grad)
-            # print(grad[:])
-            # the motion in HumanML3D always starts at the origin (0,y,0), so we zero out the gradients for the root joint
-            # grad[..., 0] = 0
-            x.detach()
-        return loss, grad
+        x_ = x_0_pred.permute(0, 3, 2, 1).contiguous()
+        x_ = x_.squeeze(2)
+        x_ = x_ * self.local_std + self.local_mean
+        x_ = local2global_rot6d_by_matrix(x_)
+        # x_ = local2global_rot6d_by_matrix(x_)
+        bs,nf,_ = x_.shape
 
-    def gradients(self, x, hint, mask_hint,mask, length = None,joint_ids=None):
-        with torch.enable_grad():
-            x.requires_grad_(True)
-            
-            # loss1 = self.masked_l2(x[:,:9], torch.zeros_like(x[:,:9]),mask) 
-            # print('1',loss1.shape)
-            x_ = x.permute(0, 3, 2, 1).contiguous()
-            x_ = x_.squeeze(2)
-            # x_ = x_ * self.global_std + self.local_mean
-            x_ = x_ * self.local_std + self.local_mean
-            x_ = local2global_rot6d_by_matrix(x_)
-            bs,nf,_ = x_.shape
+        # print(f'mask_hint:{mask_hint.shape}')
+        # print(f'hint:{hint.shape}')
+        # print(x_.reshape(bs,nf,-1).shape)
+        # loss = torch.linalg.norm((x_.reshape(bs,nf,-1) - hint) * mask_hint, dim=-1)
+        difference = (x_.reshape(bs, nf, -1) - hint) * mask_hint_new
+        # print('difference: ', difference.shape)
+        # print('x_prev: ', x_prev.shape)
+        print('difference 0-2: ', difference[:,:,3].pow(2).mean())
+        print('difference 3-9: ', difference[:,:,3:9].pow(2).mean())
+        print('difference 9-: ', difference[:,:,9:].pow(2).mean())
 
-            loss2 = torch.sum(torch.norm((x_.reshape(bs,nf,-1) - hint) * mask_hint, dim=-1),dim=-1)
-            # print('2',loss2.shape)
-            # print(torch.mean(loss1),torch.mean(loss2))
-            # print(loss.shape)
-            # torch.autograd.set_detect_anomaly(True)
-            loss = loss2
-            # loss = loss1 * 0.01 + loss2
-            grad = torch.autograd.grad([loss.sum()], [x])[0]
-            # print(grad[:])
-            # the motion in HumanML3D always starts at the origin (0,y,0), so we zero out the gradients for the root joint
-            # grad[..., 0] = 0
-            x.detach()
+        loss = torch.sum(torch.norm((x_.reshape(bs, nf, -1) - hint) * mask_hint, dim=-1), dim=-1)
+        grad = torch.autograd.grad([loss.sum()], [x_prev])[0]
+
+        print(f"Loss: ", torch.mean(loss))
+
+        # loss = torch.linalg.norm(difference.reshape(bs,-1), dim=[1]).mean()
+        # grad = torch.autograd.grad([loss], [x_prev])[0]
+
+        # norm_grad = grad * (1. - mask_hint.reshape(1, -1, 1, 60))
+
+        # print('norm_grad: ', norm_grad)
+
+        # print(grad[:])
+        # the motion in HumanML3D always starts at the origin (0,y,0), so we zero out the gradients for the root joint
+        # grad[..., 0] = 0
+        # x_t.detach()
         return loss, grad
 
     def gradients_stage0(self, x, hint, mask_hint, joint_ids=None):
@@ -568,25 +548,26 @@ class GaussianDiffusion:
             x.detach()
         return loss, grad
 
-    def gradients_stage0_global(self, x, hint, mask_hint, joint_ids=None):
+    def gradients_stage0_global(self, out, x, hint, mask_hint, joint_ids=None):
         # print('gradients_stage0')
-        with torch.enable_grad():
-            x.requires_grad_(True)
+        # with torch.enable_grad():
+        #     x.requires_grad_(True)
+        x_0_pred = out['pred_xstart']
 
-            x_ = x.permute(0, 3, 2, 1).contiguous()
-            x_ = x_.squeeze(2)
-            x_ = x_ * self.obj_global_std + self.obj_global_mean
-            # x_ = x_ * self.obj_global_std + self.obj_local_mean
-            # x_ = obj_local2global_rot6d_by_matrix(x_)
-            bs,nf,_ = x_.shape
+        x_ = x_0_pred.permute(0, 3, 2, 1).contiguous()
+        x_ = x_.squeeze(2)
+        x_ = x_ * self.obj_global_std + self.obj_global_mean
+        # x_ = x_ * self.obj_global_std + self.obj_local_mean
+        # x_ = obj_local2global_rot6d_by_matrix(x_)
+        bs,nf,_ = x_.shape
 
-            loss = torch.norm((x_.reshape(bs,nf,-1) - hint) * mask_hint, dim=-1)
-            # torch.autograd.set_detect_anomaly(True)
-            grad = torch.autograd.grad([loss.sum()], [x])[0]
-            # print(grad[:])
-            # the motion in HumanML3D always starts at the origin (0,y,0), so we zero out the gradients for the root joint
-            # grad[..., 0] = 0
-            x.detach()
+        loss = torch.norm((x_.reshape(bs,nf,-1) - hint) * mask_hint, dim=-1)
+        # torch.autograd.set_detect_anomaly(True)
+        grad = torch.autograd.grad([loss.sum()], [x])[0]
+        # print(grad[:])
+        # the motion in HumanML3D always starts at the origin (0,y,0), so we zero out the gradients for the root joint
+        # grad[..., 0] = 0
+        # x.detach()
         return loss, grad
     def gradients_stage0_1(self, x, hint, mask_hint, joint_ids=None):
         # print('gradients_stage0')
@@ -600,7 +581,7 @@ class GaussianDiffusion:
             x_ = x_.unsqueeze(2).repeat(1,1,4,1).reshape(bs,nf,-1)
             x_ = obj_local2global_rot6d_by_matrix(x_)
             x_ = x_.reshape(bs,nf,4,9)[:,:,0]
-            
+
 
             loss = torch.norm((x_.reshape(bs,nf,-1) - hint) * mask_hint, dim=-1)
             # torch.autograd.set_detect_anomaly(True)
@@ -689,41 +670,34 @@ class GaussianDiffusion:
         scale = 20 / max_keyframes
         return scale.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
 
-    def guide(self, x, t, model_kwargs=None, t_stopgrad=-10, scale=.5, n_guide_steps=10, train=False, min_variance=0.01):
+    def guide(self, out, x, t, use_guidance, model_kwargs=None, t_stopgrad=-10, scale=.5, n_guide_steps=10, train=False, min_variance=0.01):
         """
         Spatial guidance
         """
-        # print(t_stopgrad)
-        # print(scale)
-        # print(min_variance)
-        # print(model_kwargs.keys())
-        # print(model_kwargs['y'].keys())
         # n_joint = 22 if x.shape[1] == 263 else 21
         n_joint = 17
-        model_log_variance = _extract_into_tensor(self.posterior_log_variance_clipped, t, x.shape)
-        model_variance = torch.exp(model_log_variance)
+        # model_log_variance = _extract_into_tensor(self.posterior_log_variance_clipped, t, x.shape)
+        # model_variance = torch.exp(model_log_variance)
+        model_variance = out['variance']
         
         if model_variance[0, 0, 0, 0] < min_variance:
             model_variance = min_variance
 
-        if train:
-            if t[0] < 20:
-                n_guide_steps = 100
-            else:
-                n_guide_steps = 20
-        else:
-            if t[0] < 10:
-                n_guide_steps = 500
-            else:
-                n_guide_steps = 10
+        # if train:
+        #     if t[0] < 20:
+        #         n_guide_steps = 100
+        #     else:
+        #         n_guide_steps = 20
+        # else:
+        #     if t[0] < 10:
+        #         n_guide_steps = 500
+        #     else:
+        #         n_guide_steps = 10
+        n_guide_steps = 1
 
         # process hint
         hint = model_kwargs['y']['hint'].clone().detach()
-        length = model_kwargs['y']['lengths'].clone().detach().long()
-        # print(length.shape)
-        # print(type(length))
-        # print(type(length[0]))
-        # length = model_kwargs['y']['length'].clone().detach()
+        length = model_kwargs['y']['lengths'].clone().detach().long().to(x.device)
         # print(hint.shape)
         # mask_hint = hint.view(hint.shape[0], hint.shape[1], n_joint, 3).sum(dim=-1, keepdim=True) != 0
         mask_hint = hint.view(hint.shape[0], hint.shape[1],-1).sum(dim=-1, keepdim=True) != 0
@@ -742,125 +716,80 @@ class GaussianDiffusion:
         #     joint_id = torch.nonzero(m.sum(0).squeeze(-1) != 0).squeeze(1)
         #     joint_ids.append(joint_id)
         
-         ##############################################
-        if not train:
-            scale = self.calc_grad_scale(mask_hint)
-        ##################################################
-        # if t[0] < 150:
-        #     scale = 5
-        # else:
-        #     scale = 20
-
-        # scale = 1
-        # scale = 20
-        # if t[0] < 50:
-        #     scale = 2
-        # else:
-        #     scale = 20
-        mask = model_kwargs['y']['mask']
-        for _ in range(n_guide_steps):
-            loss, grad = self.gradients(x, hint, mask_hint,mask,length)
-            # print(grad.shape)
-            # print(grad[0,:,0,1])
-            # print(grad[0,:,0,0])
-            grad = model_variance * grad
-            # print(grad)
-            # print(loss.sum())
-            if t[0] >= t_stopgrad:
-                x = x - scale * grad
-        # print(loss.shape)
-        log_guide = torch.mean(loss)
-        index = t[0].cpu().item()
-        self.log_guide_dict[index] = log_guide.cpu().item()
-        print(f"{t[0]} step Guide: ",log_guide)
-        # print(f"{t[0]} step Guide: ",self.log_guide_dict)
-        # with open('/root/code/OmniControl/save/0125_with_global_loss_no_guide/samples_0125_with_global_loss_no_guide_000070000_seed10_predefined/log_guide.pkl','wb')as f:
-        #         pickle.dump(self.log_guide_dict,f)
-        # # print("Guide: ",loss.shape,grad.shape)
-        return x
-
-    def guide_new(self, x, t, model_kwargs=None, t_stopgrad=-10, scale=.5, n_guide_steps=10, train=False, min_variance=0.01):
-        """
-        Spatial guidance
-        """
-        # n_joint = 22 if x.shape[1] == 263 else 21
-        n_joints = 21
-        model_log_variance = _extract_into_tensor(self.posterior_log_variance_clipped, t, x.shape)
-        model_variance = torch.exp(model_log_variance)
-        
-        if model_variance[0, 0, 0, 0] < min_variance:
-            model_variance = min_variance
-
-        if train:
-            if t[0] < 20:
-                n_guide_steps = 100
-            else:
-                n_guide_steps = 20
-        else:
-            if t[0] < 10:
-                n_guide_steps = 500
-            else:
-                n_guide_steps = 10
-
-        # process hint
-        hint = model_kwargs['y']['hint'].clone().detach()
-        # bs,nf,_,_ = 
-        # print(hint.shape)
-        mask_hint = hint.view(hint.shape[0], hint.shape[1], n_joints, 3).sum(dim=-1, keepdim=True) != 0
-        # print(mask_hint.shape)
-        if self.global_mean.device != hint.device:
-            # print(self.global_mean.device, hint.device)
-            self.local_mean = self.local_mean.to(hint.device)
-            self.local_std = self.local_std.to(hint.device)
-            self.global_mean = self.global_mean.to(hint.device)
-            self.global_std = self.global_std.to(hint.device)
-        hint = hint.view(hint.shape[0], hint.shape[1],n_joints,3) * mask_hint
-        # joint id
-        # joint_ids = []
-        # for m in mask_hint:
-        #     joint_id = torch.nonzero(m.sum(0).squeeze(-1) != 0).squeeze(1)
-        #     joint_ids.append(joint_id)
-        
-        ##############################################
         # if not train:
-        #     scale = self.calc_grad_scale_kp(mask_hint)
-        ##################################################
-        if t[0] < 150:
-            scale = 5
-        else:
-            scale = 10
-
-        # print(scale.shape)
-
-        # if t[0] < 50:
-        #     scale = 2
+        #     scale = self.calc_grad_scale(mask_hint)
+        # if t > 500:
+        #     scale = 100
         # else:
-        #     scale = 20
-        mask = model_kwargs['y']['mask']
-        hand_shape = model_kwargs['y']['hand_shape']
+        #     scale = 0.1
+        # print(f'scale:{scale}')
+
         for _ in range(n_guide_steps):
-            loss, grad = self.gradients_new(x, hint,hand_shape, mask_hint,mask)
+            loss, grad = self.gradients(out, x, hint, mask_hint, length)
             # print(grad.shape)
             # print(grad[0,:,0,1])
             # print(grad[0,:,0,0])
-            grad = model_variance * grad
+            # grad = model_variance * grad
+            grad = grad
             # print(grad)
-            # print(loss.sum())
-            # print(x.shape,grad.shape)
-            if t[0] >= t_stopgrad:
-                x = x - scale * grad
-        # print(loss.shape)
-        log_guide = torch.mean(loss)
-        index = t[0].cpu().item()
-        self.log_guide_dict[index] = log_guide.cpu().item()
-        print(f"{t[0]} step Guide: ",log_guide)
-        # print(f"{t[0]} step Guide: ",self.log_guide_dict)
-        # with open('/root/code/OmniControl/save/0125_with_global_loss_no_guide/samples_0125_with_global_loss_no_guide_000070000_seed10_predefined/log_guide.pkl','wb')as f:
-        #         pickle.dump(self.log_guide_dict,f)
-        # # print("Guide: ",loss.shape,grad.shape)
-        if index == 0:
-            with open('/root/code/OmniControl/save/0125_with_global_loss_no_guide/samples_0125_with_global_loss_no_guide_000070000_seed10_predefined/log_guide_scale2.pkl','wb')as f:
-                pickle.dump(self.log_guide_dict,f)
+            # print('loss: ', loss)
+
+            noise = th.randn_like(x)
+            nonzero_mask = (
+                (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
+            )  # no noise when t == 0
+            sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise
+
+            if not use_guidance:
+                return sample
+
+            mask_hint = torch.where(mask_hint, 1.0, 0.0).to(torch.float32)
+            mask_hint = mask_hint.repeat(1, 1, 99)
+
+            # print('mask_hint:', mask_hint.shape)
+            # print('hint:', hint.shape)
+            # print('sample:', sample.shape)
+            # print('self.q_sample(hint, t):', self.q_sample(hint, t).shape)
+            # print('out["log_variance"].dtype', out["log_variance"].dtype)
+
+            # x = sample * (1. - mask_hint.reshape(1, -1, 1, 60)) - scale * grad + \
+            #     self.q_sample(hint, t).reshape(1, -1, 1, 60) * mask_hint.reshape(1, -1, 1, 60)
+            # print('x.dtype', x.dtype)
+            # x = x.to(torch.float32)
+
+            r = torch.linalg.norm(sample - out["mean"], dim=[1, 2, 3]).mean()
+            # print(f'r:{r}')
+            # print(f't:{t}')
+
+            if t[0] % 1 == 0:
+                eps = 1e-20
+                guidance_rate = 0.1
+                grad_norm = torch.linalg.norm(grad, dim=[1, 2, 3])
+                grad_norm = grad_norm.reshape(grad_norm.shape[0], 1, 1, 1)
+                # print(f'grad_norm:{grad_norm.shape}')
+                grad2 = grad / (grad_norm + eps)
+                direction1 = -r * grad2
+                direction2 = sample - out["mean"]
+                mix_direction = direction2 + guidance_rate * (direction1 - direction2)
+                mix_direction_norm = torch.linalg.norm(mix_direction, dim=[1, 2, 3])
+                mix_direction_norm = mix_direction_norm.reshape(mix_direction_norm.shape[0], 1, 1, 1)
+                print(f'mix_direction_norm:{mix_direction_norm.shape}')
+                mix_step = mix_direction / (mix_direction_norm + eps) * r
+                x = out["mean"] + mix_step
+            else:
+                x = sample
+
+
+            # x = sample - scale * grad
+
+            # print('hint: ', hint.shape)
+            # print('mask_hint: ', mask_hint.shape)
+
+
+            # if t[0] >= t_stopgrad:
+            #     x = x - scale * grad
+        # print("Guide: ",torch.mean(loss[:,0]))
+        # print("Guide: ",loss.shape,grad.shape)
         return x
 
     def guide_stage2(self, x, t, model_kwargs=None, t_stopgrad=-10, scale=.5, n_guide_steps=10, train=False, min_variance=0.01):
@@ -910,7 +839,7 @@ class GaussianDiffusion:
         # print("Guide: ",loss.shape,grad.shape)
         return x
 
-    def guide_stage0(self, x, t, model_kwargs=None, t_stopgrad=-10, scale=.5, n_guide_steps=10, train=False, min_variance=0.01):
+    def guide_stage0(self, out, x, t, model_kwargs=None, t_stopgrad=-10, scale=.5, n_guide_steps=10, train=False, min_variance=0.01):
         """
         Spatial guidance
         """
@@ -921,24 +850,25 @@ class GaussianDiffusion:
         if model_variance[0, 0, 0, 0] < min_variance:
             model_variance = min_variance
 
-        if train:
-            if t[0] < 20:
-                n_guide_steps = 100
-            else:
-                n_guide_steps = 20
-        else:
-            # if t[0] < 10:
-            #     n_guide_steps = 10
-            # else:
-            #     n_guide_steps = 2
-            if t[0] < 10:
-                n_guide_steps = 500
-            else:
-                n_guide_steps = 10
+        # if train:
+        #     if t[0] < 20:
+        #         n_guide_steps = 100
+        #     else:
+        #         n_guide_steps = 20
+        # else:
+        #     # if t[0] < 10:
+        #     #     n_guide_steps = 10
+        #     # else:
+        #     #     n_guide_steps = 2
+        #     if t[0] < 10:
+        #         n_guide_steps = 500
+        #     else:
+        #         n_guide_steps = 10
+
+        n_guide_steps = 1
 
         # process hint
         hint = model_kwargs['y']['hint'].clone().detach() # hint (bs, nf, 36)
-        print(hint)
         mask_hint = hint.view(hint.shape[0], hint.shape[1],-1).sum(dim=-1, keepdim=True) != 0 
         if self.obj_global_mean.device != hint.device:
             # print(self.global_mean.device, hint.device)
@@ -957,13 +887,63 @@ class GaussianDiffusion:
             # print(t[0].item(),i)
             # x, obj_pose, hint, hand_shape=None, obj_verts=None
             if self.dataset == 'gazehoi_stage0_flag2_lowfps_global' or self.dataset == 'gazehoi_stage0_1obj':
-                loss, grad = self.gradients_stage0_global(x,  hint,mask_hint)
+                loss, grad = self.gradients_stage0_global(out, x,  hint,mask_hint)
             else:
                 loss, grad = self.gradients_stage0(x,  hint,mask_hint)
-            grad = model_variance * grad
-            if t[0] >= t_stopgrad:
-                x = x - scale * grad
-        print("Guide: ",torch.mean(torch.sum(loss,dim=-1)))
+            # grad = model_variance * grad
+            # if t[0] >= t_stopgrad:
+            #     x = x - scale * grad
+            grad = grad
+            # print(grad)
+            # print('loss: ', loss)
+            print("Loss: ", torch.mean(torch.sum(loss, dim=-1)))
+
+            noise = th.randn_like(x)
+            nonzero_mask = (
+                (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
+            )  # no noise when t == 0
+            sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise
+
+            # if not use_guidance:
+            #     return sample
+
+            # mask_hint = torch.where(mask_hint, 1.0, 0.0).to(torch.float32)
+            # mask_hint = mask_hint.repeat(1, 1, 99)
+
+            # print('mask_hint:', mask_hint.shape)
+            # print('hint:', hint.shape)
+            # print('sample:', sample.shape)
+            # print('self.q_sample(hint, t):', self.q_sample(hint, t).shape)
+            # print('out["log_variance"].dtype', out["log_variance"].dtype)
+
+            # x = sample * (1. - mask_hint.reshape(1, -1, 1, 60)) - scale * grad + \
+            #     self.q_sample(hint, t).reshape(1, -1, 1, 60) * mask_hint.reshape(1, -1, 1, 60)
+            # print('x.dtype', x.dtype)
+            # x = x.to(torch.float32)
+
+            r = torch.linalg.norm(sample - out["mean"], dim=[1, 2, 3]).mean()
+            # print(f'r:{r}')
+            # print(f't:{t}')
+
+            if t[0] % 1 == 0:
+                eps = 1e-20
+                guidance_rate = 1.
+                grad_norm = torch.linalg.norm(grad, dim=[1, 2, 3])
+                grad_norm = grad_norm.reshape(grad_norm.shape[0], 1, 1, 1)
+                # print(f'grad_norm:{grad_norm.shape}')
+                grad2 = grad / (grad_norm + eps)
+                direction1 = -r * grad2
+                direction2 = sample - out["mean"]
+                mix_direction = direction2 + guidance_rate * (direction1 - direction2)
+                mix_direction_norm = torch.linalg.norm(mix_direction, dim=[1, 2, 3])
+                mix_direction_norm = mix_direction_norm.reshape(mix_direction_norm.shape[0], 1, 1, 1)
+                print(f'mix_direction_norm:{mix_direction_norm.shape}')
+                mix_step = mix_direction / (mix_direction_norm + eps) * r
+                x = out["mean"] + mix_step
+            else:
+                x = sample
+
+
         # print("Guide: ",loss.shape,grad.shape)
         return x
 
@@ -1048,6 +1028,8 @@ class GaussianDiffusion:
                  - 'sample': a random sample from the model.
                  - 'pred_xstart': a prediction of x_0.
         """
+        x = x.requires_grad_()
+        sample = None
         out = self.p_mean_variance(
             model,
             x,
@@ -1056,50 +1038,71 @@ class GaussianDiffusion:
             denoised_fn=denoised_fn,
             model_kwargs=model_kwargs,
         )
+        # if 'hint' in model_kwargs['y'].keys():
+        #     # spatial guidance/classifier guidance
+        #     hint = model_kwargs['y']['hint']
+        #
+        #     if hint.shape[-1] == 99:
+        #         # out['mean'] = self.guide(out, x, t, model_kwargs=model_kwargs)
+        #         use_guidance = True
+        #         sample = self.guide(out, x, t,use_guidance, model_kwargs=model_kwargs)
+            # elif hint.shape[-1] == 36:
+            #     out['mean'] = self.guide_stage0(out['mean'], t, model_kwargs=model_kwargs)
+            # elif hint.shape[-1] == 9:
+            #     out['mean'] = self.guide_stage0(out['mean'], t, model_kwargs=model_kwargs)
+            # else:
+            #     out['mean'] = self.guide_stage2(out['mean'], t, model_kwargs=model_kwargs)
+        # print(f'self.dataset:{self.dataset}')
+        # print("self.dataset == 'gazehoi_stage0_1obj':",self.dataset == 'gazehoi_stage0_1_obj')
         if 'hint' in model_kwargs['y'].keys():
             # spatial guidance/classifier guidance
             hint = model_kwargs['y']['hint']
-            # if hint.shape[-1] == 99: 
-            if self.dataset == 'gazehoi_stage1' or self.dataset == 'gazehoi_stage1_repair' or self.dataset == 'gazehoi_stage1_simple':
+            # if hint.shape[-1] == 99:
+            use_guidance = True
+            if self.dataset.startswith('gazehoi_stage1') :
             # if self.dataset == 'gazehoi_stage1' or self.dataset == 'gazehoi_stage1_new':
-                out['mean'] = self.guide(out['mean'], t, model_kwargs=model_kwargs)
-            elif self.dataset == 'gazehoi_stage1_new':
-                out['mean'] = self.guide(out['mean'], t, model_kwargs=model_kwargs)
+                sample = self.guide(out, x, t, use_guidance, model_kwargs=model_kwargs)
+            # elif self.dataset == 'gazehoi_stage1_new' or self.dataset == 'gazehoi_stage1_repair':
+            #     sample = self.guide(out, x, t, use_guidance, model_kwargs=model_kwargs)
                 # out['mean'] = self.guide_new(out['mean'], t, model_kwargs=model_kwargs)
-            # elif self.dataset == 'gazehoi_stage0_1obj':
-            # # elif hint.shape[-1] == 36:
-            #     out['mean'] = self.guide_stage0(out['mean'], t, model_kwargs=model_kwargs)
+            elif self.dataset == 'gazehoi_stage0':
+            # elif hint.shape[-1] == 36:
+                out['mean'] = self.guide_stage0(out['mean'], t, model_kwargs=model_kwargs)
             elif self.dataset == 'gazehoi_stage0_flag2_lowfps':
                 out['mean'] = self.guide_stage0(out['mean'], t, model_kwargs=model_kwargs)
             # elif self.dataset == 'gazehoi_stage0_flag2_lowfps_global':
             #     out['mean'] = self.guide_stage0(out['mean'], t, model_kwargs=model_kwargs)
+            elif self.dataset == 'gazehoi_stage0_1':
+            # elif hint.shape[-1] == 9:
+                out['mean'] = self.guide_stage0_1(out['mean'], t, model_kwargs=model_kwargs)
+            elif self.dataset == 'gazehoi_stage0_1obj':
+                sample = self.guide_stage0(out, x, t, model_kwargs=model_kwargs)
             elif self.dataset == 'gazehoi_stage2':
                 out['mean'] = self.guide_stage2(out['mean'], t, model_kwargs=model_kwargs)
 
-        
-
-        if const_noise:
-            noise = th.randn_like(x[0])
-            noise = noise[None].repeat(x.shape[0], 1, 1, 1)
-        else:
-            noise = th.randn_like(x)
-
-        nonzero_mask = (
-            (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
-        )  # no noise when t == 0
-        if cond_fn is not None:
-            out["mean"] = self.condition_mean(
-                cond_fn, out, x, t, model_kwargs=model_kwargs
-            )
-        # print('mean', out["mean"].shape, out["mean"])
-        # print('log_variance', out["log_variance"].shape, out["log_variance"])
-        # print('nonzero_mask', nonzero_mask.shape, nonzero_mask)
-        sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise
-
         ## GMD在此处增加了inpainting
-        if self.dataset.startswith('gazehoi_stage0_flag'):
-            return {"sample": sample, "pred_xstart": out["pred_xstart"],"flag":out['flag']}
+        if (self.dataset.startswith('gazehoi_stage1') or self.dataset == 'gazehoi_stage0_1_obj'):
+            sample = sample.detach()
+            return {"sample": sample, "pred_xstart": out["pred_xstart"]}
         else:
+            if const_noise:
+                noise = th.randn_like(x[0])
+                noise = noise[None].repeat(x.shape[0], 1, 1, 1)
+            else:
+                noise = th.randn_like(x)
+
+            nonzero_mask = (
+                (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
+            )  # no noise when t == 0
+            if cond_fn is not None:
+                out["mean"] = self.condition_mean(
+                    cond_fn, out, x, t, model_kwargs=model_kwargs
+                )
+            # print('mean', out["mean"].shape, out["mean"])
+            # print('log_variance', out["log_variance"].shape, out["log_variance"])
+            # print('nonzero_mask', nonzero_mask.shape, nonzero_mask)
+            sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise
+            sample = sample.detach()
             return {"sample": sample, "pred_xstart": out["pred_xstart"]}
 
     def p_sample_loop(
@@ -1160,11 +1163,12 @@ class GaussianDiffusion:
             cond_fn_with_grad=cond_fn_with_grad,
             const_noise=const_noise,
         )):
-            if dump_steps is not None and i in dump_steps:
-                dump.append(deepcopy(sample["sample"]))
+            if dump_steps is not None and i == dump_steps:
+                # dump.append(deepcopy(sample["pred_xstart"].detach().clone()))
+                return deepcopy(sample["pred_xstart"].detach().clone())
             final = sample
-        if dump_steps is not None:
-            return dump
+        # if dump_steps is not None:
+        #     return dump
         if self.dataset.startswith('gazehoi_stage0_flag'):
             return final["sample"],final['flag']
         else:
@@ -1205,7 +1209,7 @@ class GaussianDiffusion:
                 img = th.randn(*shape[1:], device=device)
                 img = img[None].repeat(shape[0], 1, 1, 1)
             else:
-                img = th.randn(*shape, device=device)
+                img = th.randn(*shape, device=device).requires_grad_()
 
         if skip_timesteps and init_image is None:
             init_image = th.zeros_like(img)
@@ -1228,20 +1232,20 @@ class GaussianDiffusion:
                 model_kwargs['y'] = th.randint(low=0, high=model.num_classes,
                                                size=model_kwargs['y'].shape,
                                                device=model_kwargs['y'].device)
-            with th.no_grad():
-                sample_fn = self.p_sample
-                out = sample_fn(
-                    model,
-                    img,
-                    t,
-                    clip_denoised=clip_denoised,
-                    denoised_fn=denoised_fn,
-                    cond_fn=cond_fn,
-                    model_kwargs=model_kwargs,
-                    const_noise=const_noise,
-                )
-                yield out
-                img = out["sample"]
+            # with th.no_grad():
+            sample_fn = self.p_sample
+            out = sample_fn(
+                model,
+                img,
+                t,
+                clip_denoised=clip_denoised,
+                denoised_fn=denoised_fn,
+                cond_fn=cond_fn,
+                model_kwargs=model_kwargs,
+                const_noise=const_noise,
+            )
+            yield out
+            img = out["sample"]
 
     def training_losses_stage1(self, model, x_start, t, model_kwargs=None, noise=None, dataset=None):
         """
@@ -1385,8 +1389,8 @@ class GaussianDiffusion:
         bs = target.shape[0]
         terms["rot_mse"] = self.masked_l2(target, model_output, mask) # mean_flat(rot_mse)
         # print(target.shape)
-        
-        
+
+
         # 相对表示转为绝对表示
         target_global = target.permute(0, 3, 2, 1).squeeze(2).contiguous()
         output_global = model_output.permute(0, 3, 2, 1).squeeze(2).contiguous()
@@ -1394,7 +1398,7 @@ class GaussianDiffusion:
         output_global = local2global_rot6d_by_matrix(output_global)[:,:,:9].permute(0,2,1).unsqueeze(2) #global RT
         # model_output = torch.cumsum(model_output,dim=-1)
         terms['global_mse'] = self.masked_l2(target_global, output_global, mask)
-       
+
         target_goal = torch.cat((target_global[:,:9,:,-1].unsqueeze(-1), target[:,9:,:,-1].unsqueeze(-1)),dim=1)
         output_goal = torch.cat((output_global[:,:9,:,-1].unsqueeze(-1), model_output[:,9:,:,-1].unsqueeze(-1)),dim=1)
         terms['goal_pose'] = self.masked_l2(target_goal, output_goal, mask[:,:,:,-1].unsqueeze(-1))
@@ -1461,14 +1465,14 @@ class GaussianDiffusion:
         bs = target.shape[0]
 
         terms["rot_mse"] = self.masked_l2(target, model_output, mask) # mean_flat(rot_mse)
-        
+
         # 相对表示转为绝对表示
         target_global = target.permute(0, 3, 2, 1).squeeze(2).contiguous()
         output_global = model_output.permute(0, 3, 2, 1).squeeze(2).contiguous()
         target_global = local2global_rot6d_by_matrix(target_global)[:,:,:9].permute(0,2,1).unsqueeze(2) #global RT
         output_global = local2global_rot6d_by_matrix(output_global)[:,:,:9].permute(0,2,1).unsqueeze(2) #global RT
         terms['global_mse'] = self.masked_l2(target_global, output_global, mask)
-       
+
         goal_index = model_kwargs['y']['lengths'] - 1
         target_goal = torch.cat((target_global[torch.arange(bs),:9,:,goal_index].unsqueeze(-1), target[torch.arange(bs),9:,:,goal_index].unsqueeze(-1)),dim=1)
         output_goal = torch.cat((output_global[torch.arange(bs),:9,:,goal_index].unsqueeze(-1), model_output[torch.arange(bs),9:,:,goal_index].unsqueeze(-1)),dim=1)
@@ -1483,10 +1487,10 @@ class GaussianDiffusion:
         terms['time_smooth'] = self.masked_l2(model_output[:,:9], torch.zeros_like(model_output[:,:9]),mask)
 
 
-        # terms["loss"] = terms["rot_mse"] + terms['global_mse'] * 10 + terms['goal_pose'] * 10 + terms['init_pose'] * 5 + terms['time_smooth'] * 0.01
-        # terms["loss"] = terms["rot_mse"] + terms['global_mse'] * 20 
+        terms["loss"] = terms["rot_mse"] + terms['global_mse'] * 10 + terms['goal_pose'] * 10 + terms['init_pose'] * 5 + terms['time_smooth'] * 0.01
+        # terms["loss"] = terms["rot_mse"] + terms['global_mse'] * 20
         # terms["loss"] = terms["rot_mse"] + terms['global_mse'] * 20 + terms['time_smooth'] * 0.01
-        terms["loss"] = terms["rot_mse"]*5 + terms['global_mse'] * 20 + terms['goal_pose'] * 10 + terms['init_pose'] * 5 + terms['time_smooth'] * 0.01
+        # terms["loss"] = terms["rot_mse"]*5 + terms['global_mse'] * 20 + terms['goal_pose'] * 10 + terms['init_pose'] * 5 + terms['time_smooth'] * 0.01
 
         # print(terms["rot_mse"].mean() , terms['global_mse'].mean() , terms['goal_pose'].mean() , terms['init_pose'].mean() , terms['time_smooth'].mean())
 
@@ -1533,24 +1537,24 @@ class GaussianDiffusion:
         terms["rot_mse"] = self.masked_l2(target, model_output, mask) # mean_flat(rot_mse)
 
         # 相对表示转为绝对表示
-        # target_global = target.permute(0, 3, 2, 1).squeeze(2).contiguous()
-        # output_global = model_output.permute(0, 3, 2, 1).squeeze(2).contiguous()
-        # target_global = local2global_rot6d_by_matrix(target_global)[:,:,:9].permute(0,2,1).unsqueeze(2) #global RT
-        # output_global = local2global_rot6d_by_matrix(output_global)[:,:,:9].permute(0,2,1).unsqueeze(2) #global RT
-        # terms['global_mse'] = self.masked_l2(target_global, output_global, mask)
-       
-        # goal_index = model_kwargs['y']['lengths'] - 1
-        # target_goal = torch.cat((target_global[torch.arange(bs),:9,:,goal_index].unsqueeze(-1), target[torch.arange(bs),9:,:,goal_index].unsqueeze(-1)),dim=1)
-        # output_goal = torch.cat((output_global[torch.arange(bs),:9,:,goal_index].unsqueeze(-1), model_output[torch.arange(bs),9:,:,goal_index].unsqueeze(-1)),dim=1)
-        # terms['goal_pose'] = self.masked_l2(target_goal, output_goal, mask)
+        target_global = target.permute(0, 3, 2, 1).squeeze(2).contiguous()
+        output_global = model_output.permute(0, 3, 2, 1).squeeze(2).contiguous()
+        target_global = local2global_rot6d_by_matrix(target_global)[:,:,:9].permute(0,2,1).unsqueeze(2) #global RT
+        output_global = local2global_rot6d_by_matrix(output_global)[:,:,:9].permute(0,2,1).unsqueeze(2) #global RT
+        terms['global_mse'] = self.masked_l2(target_global, output_global, mask)
+
+        goal_index = model_kwargs['y']['lengths'] - 1
+        target_goal = torch.cat((target_global[torch.arange(bs),:9,:,goal_index].unsqueeze(-1), target[torch.arange(bs),9:,:,goal_index].unsqueeze(-1)),dim=1)
+        output_goal = torch.cat((output_global[torch.arange(bs),:9,:,goal_index].unsqueeze(-1), model_output[torch.arange(bs),9:,:,goal_index].unsqueeze(-1)),dim=1)
+        terms['goal_pose'] = self.masked_l2(target_goal, output_goal, mask)
 
 
-        # target_init = torch.cat((target_global[:,:9,:,0].unsqueeze(-1), target[:,9:,:,0].unsqueeze(-1)),dim=1)
-        # output_init = torch.cat((output_global[:,:9,:,0].unsqueeze(-1), model_output[:,9:,:,0].unsqueeze(-1)),dim=1)
-        # terms['init_pose'] = self.masked_l2(target_init, output_init, mask)
-        
+        target_init = torch.cat((target_global[:,:9,:,0].unsqueeze(-1), target[:,9:,:,0].unsqueeze(-1)),dim=1)
+        output_init = torch.cat((output_global[:,:9,:,0].unsqueeze(-1), model_output[:,9:,:,0].unsqueeze(-1)),dim=1)
+        terms['init_pose'] = self.masked_l2(target_init, output_init, mask)
+
         # 1
-        terms["loss"] = terms["rot_mse"] * 10
+        # terms["loss"] = terms["rot_mse"] * 10
 
         # 2
         # terms['loss'] = terms['global_mse'] + terms["rot_mse"] * 10
@@ -1560,7 +1564,7 @@ class GaussianDiffusion:
 
         # 4
 
-        # terms['loss'] =  terms["rot_mse"] * 10 + terms['goal_pose'] + terms['init_pose']
+        terms['loss'] =  terms["rot_mse"] * 10 + terms['goal_pose'] + terms['init_pose']
 
 
         # print(terms["rot_mse"].mean() , terms['global_mse'].mean())
@@ -1662,7 +1666,7 @@ class GaussianDiffusion:
 
         terms["rot_mse"] = self.masked_l2(target, model_output, mask) # mean_flat(rot_mse)
 
-        
+
 
         gt_hand_T = target[:,:3,:,:]
         pred_hand_T = model_output[:,:3,:,:]
@@ -1679,60 +1683,6 @@ class GaussianDiffusion:
         terms['loss'] =  terms["rot_mse"]*10 + terms['hand_T']*10  + terms['offset'] * 20
 
         # print(torch.mean(terms["rot_mse"]), torch.mean(terms['hand_T']) , torch.mean(terms['offset']))
-        return terms
-
-    def training_losses_o2h_mid(self, model, x_start, t, model_kwargs=None, noise=None, dataset=None):
-        """
-        Compute training losses for a single timestep.
-
-        :param model: the model to evaluate loss on.
-        :param x_start: the [N x C x ...] tensor of inputs.
-        :param t: a batch of timestep indices.
-        :param model_kwargs: if not None, a dict of extra keyword arguments to
-            pass to the model. This can be used for conditioning.
-        :param noise: if specified, the specific Gaussian noise to try to remove.
-        :return: a dict with the key "loss" containing a tensor of shape [N].
-                 Some mean or variance settings may also have other keys.
-        """
-
-        mask = model_kwargs['y']['mask']
-
-        if model_kwargs is None:
-            model_kwargs = {}
-        if noise is None:
-            noise = th.randn_like(x_start)
-        x_t = self.q_sample(x_start, t, noise=noise) # 对x0加噪
-        # print(x_t.shape)
-        terms = {}
-        # print(x_t.shape)
-        model_output = model(x_t, self._scale_timesteps(t), **model_kwargs)
-
-        target = {
-            ModelMeanType.PREVIOUS_X: self.q_posterior_mean_variance(
-                x_start=x_start, x_t=x_t, t=t
-            )[0],
-            ModelMeanType.START_X: x_start,
-            ModelMeanType.EPSILON: noise,
-        }[self.model_mean_type]
-        assert model_output.shape == target.shape == x_start.shape  # [bs, njoints, nfeats, nframes]
-        bs = target.shape[0]
-
-        terms["rot_mse"] = self.masked_l2(target, model_output, mask) # mean_flat(rot_mse)
-
-        # gt_hand_T = target[:,:3,:,:]
-        # pred_hand_T = model_output[:,:3,:,:]
-        # terms['hand_T'] = self.masked_l2(gt_hand_T, pred_hand_T,mask)
-
-        # gt_obj_pose = model_kwargs['y']['obj_pose']
-        # gt_obj_T = gt_obj_pose[:,:,:3].permute(0,2,1).unsqueeze(2)
-
-        # gt_offset = gt_hand_T - gt_obj_T
-        # pred_offset = pred_hand_T - gt_obj_T
-        # terms['offset'] = self.masked_l2(gt_offset, pred_offset, mask)
-
-        terms['loss'] =  terms["rot_mse"] * 100
-
-        # print(torch.mean(terms["rot_mse"]))
         return terms
 
 
@@ -1786,7 +1736,7 @@ class GaussianDiffusion:
         # model_output = torch.cumsum(model_output,dim=-1)
         terms['global_mse'] = self.masked_l2(target_global, output_global, mask)
 
-       
+
 
         terms['time_smooth'] = self.masked_l2(model_output[:,:9], torch.zeros_like(model_output[:,:9]),mask)
         # 0123 调整后
@@ -1943,7 +1893,7 @@ class GaussianDiffusion:
         if noise is None:
             noise = th.randn_like(x_start)
         x_t = self.q_sample(x_start, t, noise=noise) # 对x0加噪
-        
+
         # x_t = self.guide_stage0(x_t, t, model_kwargs=model_kwargs, train=True)
         # print(x_t.shape)
         terms = {}
@@ -2000,7 +1950,7 @@ class GaussianDiffusion:
         o2_verts = obj_verts[:,:,500:1000,:]
         o3_verts = obj_verts[:,:,1000:1500,:]
         o4_verts = obj_verts[:,:,1500:,:]
-        
+
         # print(target.device)
         tgt_obj_verts = self.get_verts(o1_verts,o2_verts,o3_verts,o4_verts,target)
         out_obj_verts = self.get_verts(o1_verts,o2_verts,o3_verts,o4_verts,output)
@@ -2034,7 +1984,7 @@ class GaussianDiffusion:
         if noise is None:
             noise = th.randn_like(x_start)
         x_t = self.q_sample(x_start, t, noise=noise) # 对x0加噪
-        
+
         # x_t = self.guide_stage0(x_t, t, model_kwargs=model_kwargs, train=True)
         # print(x_t.shape)
         terms = {}
@@ -2049,7 +1999,7 @@ class GaussianDiffusion:
             ModelMeanType.START_X: x_start,
             ModelMeanType.EPSILON: noise,
         }[self.model_mean_type]
-        assert model_output.shape == target.shape == x_start.shape  # [bs, njoints, nfeats, nframes] 
+        assert model_output.shape == target.shape == x_start.shape  # [bs, njoints, nfeats, nframes]
         # print(target.shape) ([64, 36, 1, 69])
         bs = target.shape[0]
         nf = target.shape[-1]
@@ -2099,7 +2049,7 @@ class GaussianDiffusion:
         o2_verts = obj_verts[:,:,500:1000,:]
         o3_verts = obj_verts[:,:,1000:1500,:]
         o4_verts = obj_verts[:,:,1500:,:]
-        
+
         # print(target.device)
         tgt_obj_verts = self.get_verts_global(o1_verts,o2_verts,o3_verts,o4_verts,target)
         out_obj_verts = self.get_verts_global(o1_verts,o2_verts,o3_verts,o4_verts,output)
@@ -2119,12 +2069,82 @@ class GaussianDiffusion:
         # terms["loss"] = terms["rot_mse"] + terms['time_smooth'] * 0.1 + terms['obj_verts'] + terms['move_flag'] + terms['active_flag'] + terms['rot_mse_active']*10
         # 0226_stage0_global2
         # terms["loss"] = terms["rot_mse"] + terms['time_smooth'] * 0.1 + terms['obj_verts'] + terms['active_flag'] + terms['rot_mse_active']*10
-        
+
         ## CVPR loss
         terms["loss"] = 20*terms["rot_mse"] + 20* terms['obj_T'] + 10*terms['obj_verts']
         return terms
 
     def training_losses_stage0_1obj(self, model, x_start, t, model_kwargs=None, noise=None, dataset=None):
+        """
+        Compute training losses for a single timestep.
+
+        :param model: the model to evaluate loss on.
+        :param x_start: the [N x C x ...] tensor of inputs.
+        :param t: a batch of timestep indices.
+        :param model_kwargs: if not None, a dict of extra keyword arguments to
+            pass to the model. This can be used for conditioning.
+        :param noise: if specified, the specific Gaussian noise to try to remove.
+        :return: a dict with the key "loss" containing a tensor of shape [N].
+                 Some mean or variance settings may also have other keys.
+        """
+
+        mask = model_kwargs['y']['mask']
+
+        if model_kwargs is None:
+            model_kwargs = {}
+        if noise is None:
+            noise = th.randn_like(x_start)
+        x_t = self.q_sample(x_start, t, noise=noise) # 对x0加噪
+
+        # x_t = self.guide_stage0(x_t, t, model_kwargs=model_kwargs, train=True)
+        # print(x_t.shape)
+        terms = {}
+
+        model_output = model(x_t, self._scale_timesteps(t), **model_kwargs)
+        # model_output = self.guide(model_output,t,model_kwargs=model_kwargs, train=True)
+
+        target = {
+            ModelMeanType.PREVIOUS_X: self.q_posterior_mean_variance(
+                x_start=x_start, x_t=x_t, t=t
+            )[0],
+            ModelMeanType.START_X: x_start,
+            ModelMeanType.EPSILON: noise,
+        }[self.model_mean_type]
+        assert model_output.shape == target.shape == x_start.shape  # [bs, njoints, nfeats, nframes]
+        # print(target.shape) ([64, 36, 1, 69])
+        bs = target.shape[0]
+        nf = target.shape[-1]
+        terms["rot_mse"] = self.masked_l2(target, model_output, mask) # mean_flat(rot_mse)
+
+        target = target.permute(0, 3, 2, 1).squeeze(2).contiguous()
+        output = model_output.permute(0, 3, 2, 1).squeeze(2).contiguous()
+
+        gt_T = target[:,:,:3].reshape(bs,nf,-1).permute(0,2,1).unsqueeze(2)
+        out_T = output[:,:,:3].reshape(bs,nf,-1).permute(0,2,1).unsqueeze(2)
+        # print(gt_T.shape)
+        # print(mask.shape)
+        terms['obj_T'] = self.masked_l2(gt_T, out_T, mask)
+
+
+        # obj verts loss
+        # print(model_kwargs['y']['obj_points'].shape)
+        length = model.length
+        # print(length)
+        obj_verts = model_kwargs['y']['obj_points'][:,:500].reshape(-1,500,3).unsqueeze(1).repeat(1,length,1,1) # (b, nframs,npoints,3) 只截取物体的部分
+
+        tgt_obj_verts = self.get_1verts_global(obj_verts,target)
+        out_obj_verts = self.get_1verts_global(obj_verts,output)
+        terms['obj_verts'] = self.masked_l2(tgt_obj_verts, out_obj_verts, mask)
+
+        vel = model_output[:,:,:,1:] -  model_output[:,:,:,:-1]
+        # print(vel.shape)
+        terms['time_smooth'] = self.masked_l2(vel, torch.zeros_like(vel),mask[:,:,:,1:])
+
+        # terms["loss"] = 20*terms["rot_mse"] + 20* terms['obj_T'] + 10*terms['obj_verts'] + terms['time_smooth']
+        terms["loss"] = 10*terms["rot_mse"] + 30* terms['obj_T'] + 10*terms['obj_verts'] + terms['time_smooth']
+        return terms
+
+    def training_losses_stage0_1(self, model, x_start, t, model_kwargs=None, noise=None, dataset=None):
         """
         Compute training losses for a single timestep.
 
@@ -2160,40 +2180,54 @@ class GaussianDiffusion:
             ModelMeanType.START_X: x_start,
             ModelMeanType.EPSILON: noise,
         }[self.model_mean_type]
-        assert model_output.shape == target.shape == x_start.shape  # [bs, njoints, nfeats, nframes] 
-        # print(target.shape) ([64, 36, 1, 69])
-        bs = target.shape[0]
-        nf = target.shape[-1]
+        assert model_output.shape == target.shape == x_start.shape  # [bs, njoints, nfeats, nframes]
         terms["rot_mse"] = self.masked_l2(target, model_output, mask) # mean_flat(rot_mse)
-
+        # print(target.shape)
+        bs = target.shape[0]
+        frames = target.shape[-1]
+        # 相对表示转为绝对表示
         target = target.permute(0, 3, 2, 1).squeeze(2).contiguous()
         output = model_output.permute(0, 3, 2, 1).squeeze(2).contiguous()
-
-        gt_T = target[:,:,:3].reshape(bs,nf,-1).permute(0,2,1).unsqueeze(2)
-        out_T = output[:,:,:3].reshape(bs,nf,-1).permute(0,2,1).unsqueeze(2)
-        # print(gt_T.shape)
-        # print(mask.shape)
-        terms['obj_T'] = self.masked_l2(gt_T, out_T, mask)
-
+        target_global = obj_local2global_rot6d_by_matrix(target.unsqueeze(-2).repeat(1,1,4,1).reshape(bs,-1,36)).permute(0,2,1).unsqueeze(2) #global RT
+        output_global = obj_local2global_rot6d_by_matrix(output.unsqueeze(-2).repeat(1,1,4,1).reshape(bs,-1,36)).permute(0,2,1).unsqueeze(2) #global RT
+        # model_output = torch.cumsum(model_output,dim=-1)
+        # print(target_global.shape)
+        terms['global_mse'] = self.masked_l2(target_global, output_global, mask)
 
         # obj verts loss
         # print(model_kwargs['y']['obj_points'].shape)
-        length = model.length
-        # print(length)
-        obj_verts = model_kwargs['y']['obj_points'][:,:500].reshape(-1,500,3).unsqueeze(1).repeat(1,length,1,1) # (b, nframs,npoints,3) 只截取物体的部分
+        obj_verts = model_kwargs['y']['obj_points'][:,:500].unsqueeze(1).repeat(1,345,1,1) # (b, nframs,npoints,3) 只截取物体的部分
         
-        tgt_obj_verts = self.get_1verts_global(obj_verts,target)
-        out_obj_verts = self.get_1verts_global(obj_verts,output)
+        tgt_matrix = obj_local2global_matrix(target.unsqueeze(-2).repeat(1,1,4,1).reshape(bs,-1,36)) # bs,nframes,4,3,4
+        tgt_R = tgt_matrix[:,:,0,:3,:3] #bs,nframes,4,3,3
+        tgt_T = tgt_matrix[:,:,0,:3,3].unsqueeze(-2) #bs,nframes,4,1,3
+        tgt_R = torch.einsum('...ij->...ji', [tgt_R]) # 对R的最后两个维度转置
+        # print(o1_verts.shape,tgt_R1.shape,tgt_T1.shape)
+        tgt_o = torch.einsum('bfpn,bfnk->bfpk',obj_verts,tgt_R) + tgt_T #    b frames 500 3
+        tgt_obj_verts = tgt_o.reshape(bs,frames,-1).permute(0,2,1).unsqueeze(2)
+
+        tgt_matrix = obj_local2global_matrix(output.unsqueeze(-2).repeat(1,1,4,1).reshape(bs,-1,36)) # bs,nframes,4,3,4
+        tgt_R = tgt_matrix[:,:,0,:3,:3] #bs,nframes,4,3,3
+        tgt_T = tgt_matrix[:,:,0,:3,3].unsqueeze(-2) #bs,nframes,4,1,3
+        tgt_R = torch.einsum('...ij->...ji', [tgt_R]) # 对R的最后两个维度转置
+        # print(o1_verts.shape,tgt_R1.shape,tgt_T1.shape)
+        out_o = torch.einsum('bfpn,bfnk->bfpk',obj_verts,tgt_R) + tgt_T #    b frames 500 3
+        out_obj_verts = out_o.reshape(bs,frames,-1).permute(0,2,1).unsqueeze(2)
+        
+        # print(target.device)
+        # tgt_obj_verts = self.get_verts(o1_verts,o2_verts,o3_verts,o4_verts,target)
+        # out_obj_verts = self.get_verts(o1_verts,o2_verts,o3_verts,o4_verts,output)
+        # print(tgt_obj_verts.shape, out_obj_verts.shape)
         terms['obj_verts'] = self.masked_l2(tgt_obj_verts, out_obj_verts, mask)
 
-        vel = model_output[:,:,:,1:] -  model_output[:,:,:,:-1]
-        # print(vel.shape)
-        terms['time_smooth'] = self.masked_l2(vel, torch.zeros_like(vel),mask[:,:,:,1:])
 
-        # terms["loss"] = 20*terms["rot_mse"] + 20* terms['obj_T'] + 10*terms['obj_verts'] + terms['time_smooth']
-        terms["loss"] = 10*terms["rot_mse"] + 30* terms['obj_T'] + 10*terms['obj_verts'] + terms['time_smooth']
+        terms['time_smooth'] = self.masked_l2(model_output[:,:9], torch.zeros_like(model_output[:,:9]),mask)
+        # 0123 调整后
+        terms["loss"] = terms["rot_mse"] + terms['global_mse'] + terms['time_smooth'] * 0.1 + terms['obj_verts']
+
         return terms
-  
+
+
 def _extract_into_tensor(arr, timesteps, broadcast_shape):
     """
     Extract values from a 1-D numpy array for a batch of indices.

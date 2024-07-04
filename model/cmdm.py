@@ -314,7 +314,6 @@ class CMDM(torch.nn.Module):
                                             nn.Linear(8,1) )
 
         elif  self.dataset == 'gazehoi_stage0_1obj':
-            print("correct")
             self.encode_obj_pose = nn.Linear(9,self.latent_dim)
             
             self.encode_obj_mesh = PointNet2SemSegSSGShape({'feat_dim': self.latent_dim})
@@ -326,21 +325,84 @@ class CMDM(torch.nn.Module):
                                             n_self_att_heads=4,
                                             n_self_att_layers=3,
                                             dropout=0.1)
-            
-            
-        elif self.dataset == 'gazehoi_stage0_1':
-            # print("correct")
+
+        elif  self.dataset == 'gazehoi_stage0_noatt':
             self.encode_obj_pose = nn.Linear(9,self.latent_dim)
-            self.encode_obj_mesh = PointNetEncoder(global_feat=False, feature_transform=True, channel=3)
-            self.pointnet_emb = nn.Linear(1024,self.latent_dim)
-            self.obj_linear = nn.Linear(self.latent_dim*4,self.latent_dim)
-            self.gaze_linear = nn.Linear(3, 16)  
-            self.encode_gaze = PerceiveEncoder(n_input_channels=16,
+            
+            self.encode_obj_mesh = PointNet2SemSegSSGShape({'feat_dim': self.latent_dim})
+            self.fp_layer = MyFPModule()
+            self.gaze_linear = nn.Linear(3, self.latent_dim)  
+            # self.encode_gaze = PerceiveEncoder(n_input_channels=self.latent_dim,
+            #                                 n_latent=self.length,
+            #                                 n_latent_channels=self.latent_dim,
+            #                                 n_self_att_heads=4,
+            #                                 n_self_att_layers=3,
+            #                                 dropout=0.1)
+        elif self.dataset == 'gazehoi_g2ho':
+            self.encode_obj_pose = nn.Linear(9,self.latent_dim)
+            
+            self.encode_obj_mesh = PointNet2SemSegSSGShape({'feat_dim': self.latent_dim})
+            self.fp_layer = MyFPModule()
+            self.gaze_linear = nn.Linear(self.latent_dim, self.latent_dim)  
+            self.encode_gaze = PerceiveEncoder(n_input_channels=self.latent_dim,
                                             n_latent=self.length,
                                             n_latent_channels=self.latent_dim,
                                             n_self_att_heads=4,
                                             n_self_att_layers=3,
                                             dropout=0.1)
+            self.encode_hand_pose = nn.Sequential(nn.Linear(99,128), nn.ELU(),
+                                                nn.Linear(128,self.latent_dim) )
+        elif self.dataset == 'gazehoi_o2h':
+            self.encode_obj_pose = nn.Linear(9,self.latent_dim)
+            
+            self.encode_obj_mesh = PointNet2SemSegSSGShape({'feat_dim': self.latent_dim})
+            self.encode_obj = PerceiveEncoder(n_input_channels=self.latent_dim,
+                                            n_latent=self.length,
+                                            n_latent_channels=self.latent_dim,
+                                            n_self_att_heads=4,
+                                            n_self_att_layers=3,
+                                            dropout=0.1)
+            self.encode_hand_pose = nn.Sequential(nn.Linear(99,128), nn.ELU(),
+                                                nn.Linear(128,self.latent_dim) )
+        elif self.dataset == 'gazehoi_o2h_mid':
+            self.encode_obj_pose = nn.Linear(12,self.latent_dim)
+            
+            self.encode_obj_mesh = PointNet2SemSegSSGShape({'feat_dim': self.latent_dim})
+            self.encode_obj = PerceiveEncoder(n_input_channels=self.latent_dim,
+                                            n_latent=self.length,
+                                            n_latent_channels=self.latent_dim,
+                                            n_self_att_heads=4,
+                                            n_self_att_layers=3,
+                                            dropout=0.1)
+            self.encode_hand_pose = nn.Sequential(nn.Linear(291,128), nn.ELU(),
+                                                nn.Linear(128,self.latent_dim) )
+
+
+        elif  self.dataset == 'gazehoi_stage0_norm':
+            self.encode_obj_pose = nn.Linear(9,self.latent_dim)
+            
+            self.encode_obj_mesh = PointNet2SemSegSSGShape({'feat_dim': self.latent_dim})
+            self.gaze_linear = nn.Linear(6, 32)  
+            self.encode_gaze = PerceiveEncoder(n_input_channels=32,
+                                            n_latent=self.length,
+                                            n_latent_channels=self.latent_dim,
+                                            n_self_att_heads=4,
+                                            n_self_att_layers=3,
+                                            dropout=0.1)
+
+        elif  self.dataset == 'gazehoi_stage0_point':
+            self.encode_obj_pose = nn.Linear(9,self.latent_dim)
+            
+            self.encode_obj_mesh = PointNet2SemSegSSGShape({'feat_dim': self.latent_dim})
+            self.gaze_linear = nn.Linear(3, 32)  
+            self.encode_gaze = PerceiveEncoder(n_input_channels=32,
+                                            n_latent=self.length,
+                                            n_latent_channels=self.latent_dim,
+                                            n_self_att_heads=4,
+                                            n_self_att_layers=3,
+                                            dropout=0.1)
+            
+            
 
         elif self.dataset == 'gazehoi_stage1_new' or self.dataset == 'gazehoi_stage1_repair':
             self.encode_obj_pose = nn.Sequential(nn.Linear(9,64), nn.ELU(),
@@ -349,12 +411,17 @@ class CMDM(torch.nn.Module):
                                                 nn.Linear(128,self.latent_dim) )
             self.encode_obj_mesh = PointNetEncoder(global_feat=False, feature_transform=True, channel=3)
             self.pointnet_emb = nn.Linear(1024,self.latent_dim)
+
+        elif self.dataset == 'gazehoi_stage1_simple':
+            self.encode_hand_pose = nn.Sequential(nn.Linear(99,128), nn.ELU(),
+                                                nn.Linear(128,self.latent_dim) )
             
 
         # if self.dataset != 'gazehoi_stage':
-        if not (self.dataset.startswith('gazehoi_stage0')):
+        if not (self.dataset.startswith('gazehoi_stage0')) and not (self.dataset == 'gazehoi_stage1_simple') and not(self.dataset == 'gazehoi_g2ho') and not(self.dataset == 'gazehoi_o2h') and not(self.dataset == 'gazehoi_o2h_mid'):
         # if not (self.dataset.startswith('gazehoi_stage0')) and self.dataset != 'gazehoi_stage1_repair':
         # if not (self.dataset.startswith('gazehoi_stage0')) and not (self.dataset == 'gazehoi_stage1_new'):
+            print(self.data_rep, self.hint_dim, self.latent_dim)
             self.input_hint_block = HintBlock(self.data_rep, self.hint_dim, self.latent_dim)
 
             self.c_input_process = InputProcess(self.data_rep, self.input_feats+self.gru_emb_dim, self.latent_dim)
@@ -375,25 +442,9 @@ class CMDM(torch.nn.Module):
             
             self.c_embed_timestep = TimestepEmbedder(self.latent_dim, self.sequence_pos_encoder)
 
-        # if self.cond_mode != 'no_cond':
-        #     if 'text' in self.cond_mode:
-        #         self.c_embed_text = nn.Linear(self.clip_dim, self.latent_dim)
-
     def parameters_wo_clip(self):
         return [p for name, p in self.named_parameters() if not name.startswith('clip_model.')]
 
-    def load_and_freeze_clip(self, clip_version):
-        clip_model, clip_preprocess = clip.load(clip_version, device='cpu',
-                                                jit=False)  # Must set jit=False for training
-        clip.model.convert_weights(
-            clip_model)  # Actually this line is unnecessary since clip by default already on float16
-
-        # Freeze CLIP weights
-        clip_model.eval()
-        for p in clip_model.parameters():
-            p.requires_grad = False
-
-        return clip_model
 
     def mask_cond(self, cond, force_mask=False):
         bs, d = cond.shape
@@ -404,23 +455,6 @@ class CMDM(torch.nn.Module):
             return cond * (1. - mask)
         else:
             return cond
-
-    def encode_text(self, raw_text):
-        # raw_text - list (batch_size length) of strings with input text prompts
-        device = next(self.parameters()).device
-        max_text_len = 20 if self.dataset in ['humanml', 'kit'] else None  # Specific hardcoding for humanml dataset
-        if max_text_len is not None:
-            default_context_length = 77
-            context_length = max_text_len + 2 # start_token + 20 + end_token
-            assert context_length < default_context_length
-            texts = clip.tokenize(raw_text, context_length=context_length, truncate=True).to(device) # [bs, context_length] # if n_tokens > context_length -> will truncate
-            # print('texts', texts.shape)
-            zero_pad = torch.zeros([texts.shape[0], default_context_length-context_length], dtype=texts.dtype, device=texts.device)
-            texts = torch.cat([texts, zero_pad], dim=1)
-            # print('texts after pad', texts.shape, texts)
-        else:
-            texts = clip.tokenize(raw_text, truncate=True).to(device) # [bs, context_length] # if n_tokens > 77 -> will truncate
-        return self.clip_model.encode_text(texts).float()
 
     def cmdm_forward(self, x, timesteps, y=None, weight=1.0):
         """
@@ -505,6 +539,15 @@ class CMDM(torch.nn.Module):
             goal_hand_emb = self.encode_hand_pose(y['goal_hand_pose'])
             # print(x.shape)
             x = x + obj_pose_emb + obj_shape_emb + init_hand_emb + goal_hand_emb
+        elif self.dataset == 'gazehoi_stage1_simple':
+            # print(x.shape)
+            """
+            提取物体pose和shape特征
+            """
+            # print(y['goal_obj_pose'].shape)
+            init_hand_emb = self.encode_hand_pose(y['init_hand_pose']) #b,D
+            goal_hand_emb = self.encode_hand_pose(y['goal_hand_pose'])
+            x = x + init_hand_emb + goal_hand_emb
         elif self.dataset == 'gazehoi_stage0':
             # print(x.shape)
             """
@@ -652,32 +695,94 @@ class CMDM(torch.nn.Module):
             gaze_feat = self.encode_gaze(gaze_feat)
 
             x = x + obj_pose_emb + global_obj_feat + gaze_feat.permute(1,0,2).contiguous()
-
-
-        elif self.dataset == 'gazehoi_stage0_1':
-            # print(x.shape)
+        elif self.dataset == 'gazehoi_stage0_noatt':
             """
             提取物体pose和shape特征
             """
             bs, nf, _ = y['gaze'].shape
             init_obj_pose = y['hint'][:,0]
             obj_pose_emb = self.encode_obj_pose(init_obj_pose).unsqueeze(0)
-            # print(obj_pose_emb.shape)
             points = y['obj_points']
-            # reshape(bs,-1,3).permute(0,2,1).contiguous()
             table = points[:,500:]
-            obj_mesh = points[:,:500].reshape(bs,500,3)
-            global_obj_feat,points_feat, _ ,_ = self.encode_obj_mesh(table.permute(0,2,1).contiguous())
-            obj_shape_emb = self.pointnet_emb(global_obj_feat).unsqueeze(0)
-            # for i in range(0, 4):
-            global_obj_feat,points_feat, _ ,_ = self.encode_obj_mesh(obj_mesh.permute(0,2,1).contiguous())
-            # print(global_obj_feat.shape)
-            obj_shape_emb += self.pointnet_emb(global_obj_feat).unsqueeze(0)
-                
-            gaze_emb = self.encode_gaze(self.gaze_linear(y['gaze'])).permute(1,0,2).contiguous()
-            # print(x.shape, obj_pose_emb.shape, obj_shape_emb.shape, gaze_emb.shape)
+            points_feat, global_obj_feat= self.encode_obj_mesh(points.repeat(1, 1, 2))
+            gaze = y['gaze']
+            # gaze_emb = self.fp_layer(gaze, points, points_feat).permute((0, 2, 1))
+            gaze_feat = self.gaze_linear(gaze)
+            # gaze_feat = self.encode_gaze(gaze_feat)
 
-            x = x + obj_pose_emb + obj_shape_emb + gaze_emb 
+            x = x + obj_pose_emb + global_obj_feat + gaze_feat.permute(1,0,2).contiguous()
+
+        elif self.dataset == 'gazehoi_g2ho':
+            """
+            提取物体pose和shape特征
+            """
+            bs, nf, _ = y['gaze'].shape
+            init_obj_pose = y['init_obj_pose']
+            obj_pose_emb = self.encode_obj_pose(init_obj_pose).unsqueeze(0)
+            points = y['obj_points']
+            table = points[:,500:]
+            points_feat, global_obj_feat= self.encode_obj_mesh(points.repeat(1, 1, 2))
+            gaze = y['gaze']
+            gaze_emb = self.fp_layer(gaze, points, points_feat).permute((0, 2, 1))
+            gaze_feat = self.gaze_linear(gaze_emb)
+            gaze_feat = self.encode_gaze(gaze_feat)
+
+            init_hand_emb = self.encode_hand_pose(y['init_hand_pose']) #b,D
+
+            x = x + obj_pose_emb + global_obj_feat + gaze_feat.permute(1,0,2).contiguous() + init_hand_emb 
+
+        elif self.dataset == 'gazehoi_o2h':
+            """
+            提取物体pose和shape特征
+            """
+            bs, nf, _ = y['obj_pose'].shape
+            obj_pose = y['obj_pose']
+            # print(obj_pose.shape)
+            obj_pose_emb = self.encode_obj_pose(obj_pose)
+
+            points = y['obj_points']
+            points_feat, global_obj_feat= self.encode_obj_mesh(points.repeat(1, 1, 2))
+
+            obj_feat = self.encode_obj(obj_pose_emb)
+
+            init_hand_emb = self.encode_hand_pose(y['init_hand_pose']) #b,D
+
+            x = x  + global_obj_feat + obj_feat.permute(1,0,2).contiguous() + init_hand_emb 
+        elif self.dataset == 'gazehoi_o2h_mid':
+            """
+            提取物体pose和shape特征
+            """
+            bs, nf, _ = y['obj_pose'].shape
+            obj_pose = y['obj_pose']
+            # print(obj_pose.shape)
+            obj_pose_emb = self.encode_obj_pose(obj_pose)
+
+            points = y['obj_points']
+            points_feat, global_obj_feat= self.encode_obj_mesh(points.repeat(1, 1, 2))
+
+            obj_feat = self.encode_obj(obj_pose_emb)
+
+            init_hand_emb = self.encode_hand_pose(y['init_hand_pose']) #b,D
+
+            x = x  + global_obj_feat + obj_feat.permute(1,0,2).contiguous() + init_hand_emb 
+
+        elif self.dataset == 'gazehoi_stage0_norm' or self.dataset == 'gazehoi_stage0_point':
+            """
+            提取物体pose和shape特征
+            """
+            bs, nf, _ = y['gaze'].shape
+            init_obj_pose = y['hint'][:,0]
+            obj_pose_emb = self.encode_obj_pose(init_obj_pose).unsqueeze(0)
+            points = y['obj_points']
+            table = points[:,500:]
+            points_feat, global_obj_feat= self.encode_obj_mesh(points.repeat(1, 1, 2))
+            gaze = y['gaze']
+            gaze_feat = self.gaze_linear(gaze)
+            gaze_feat = self.encode_gaze(gaze_feat)
+
+            x = x + obj_pose_emb + global_obj_feat + gaze_feat.permute(1,0,2).contiguous()
+
+
 
         # adding the timestep embed
         xseq = torch.cat((emb, x), axis=0)  # [seqlen+1, bs, d]
@@ -772,7 +877,7 @@ class CMDM(torch.nn.Module):
         """
         # if 'hint' in y.keys() :
         # if 'hint' in y.keys() and not (self.dataset.startswith('gazehoi_stage0')) and self.dataset != 'gazehoi_stage1_repair' :
-        if 'hint' in y.keys() and not (self.dataset.startswith('gazehoi_stage0')) and not (self.dataset == 'gazehoi_stage1_new'):
+        if 'hint' in y.keys() and not (self.dataset.startswith('gazehoi_stage0')) and not (self.dataset == 'gazehoi_stage1_new') and not (self.dataset == 'gazehoi_stage1_simple') and not(self.dataset == 'gazehoi_g2ho') and not(self.dataset == 'gazehoi_o2h') and not(self.dataset == 'gazehoi_o2h_mid'):
             control = self.cmdm_forward(x, timesteps, y)
         else:
             control = None
@@ -880,7 +985,7 @@ class InputProcess(nn.Module):
         # print(x.shape)
         x = x.permute((3, 0, 1, 2)).reshape(nframes, bs, njoints*nfeats)
 
-        if self.data_rep in ['rot6d', 'xyz', 'hml_vec']:
+        if self.data_rep in ['rot6d', 'xyz', 'hml_vec','mid']:
             x = self.poseEmbedding(x)  # [seqlen, bs, d]
             return x
         elif self.data_rep == 'rot_vel':
@@ -907,7 +1012,7 @@ class OutputProcess(nn.Module):
 
     def forward(self, output):
         nframes, bs, d = output.shape
-        if self.data_rep in ['rot6d', 'xyz', 'hml_vec']:
+        if self.data_rep in ['rot6d', 'xyz', 'hml_vec','mid']:
             output = self.poseFinal(output)  # [seqlen, bs, 150]
         elif self.data_rep == 'rot_vel':
             first_pose = output[[0]]  # [1, bs, d]

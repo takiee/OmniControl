@@ -93,15 +93,8 @@ def main():
     all_lengths = []
     all_text = []
     all_hint = []
-    all_hint_for_vis = []
     all_seqs = []
-    all_obj_index = []
-    all_obj_activeflag = []
     all_gt = []
-
-    all_active_flag = []
-    all_move_flag = []
-    all_flag = []
 
     for rep_i in range(args.num_repetitions):
         print(f'### Sampling [repetitions #{rep_i}]')
@@ -111,9 +104,21 @@ def main():
             model_kwargs['y']['scale'] = torch.ones(args.batch_size, device=dist_util.dev()) * args.guidance_param
         length = model_kwargs['y']['lengths'].cpu()
         sample_fn = diffusion.p_sample_loop
-        # print(args.batch_size, model.njoints, model.nfeats, n_frames)
         if not args.dataset.startswith('gazehoi_stage0'):
+            global_mean = torch.from_numpy(np.load('dataset/gazehoi_global_motion_6d_mean.npy'))
+            global_std = torch.from_numpy(np.load('dataset/gazehoi_global_motion_6d_std.npy'))
+            local_mean = torch.from_numpy(np.load('dataset/gazehoi_local_motion_6d_mean.npy'))
+            local_std = torch.from_numpy(np.load('dataset/gazehoi_local_motion_6d_std.npy'))
             print('!!!!!')
+            if args.dataset.startswith('gazehoi_stage1'):
+                hint = model_kwargs['y']['hint'].cpu()
+                # print(torch.sum(hint[0]))
+                mask_hint = hint.view(hint.shape[0], hint.shape[1],-1).sum(dim=-1, keepdim=True) != 0
+                hint = (hint * global_std + global_mean)*mask_hint
+                hint = rot6d2axis(hint)
+                all_hint.append(hint.data.cpu().numpy()) 
+                # print(hint[0],hint[0][length[0]-1])
+            dump_steps = 750
             sample = sample_fn(
                 model,
                 (args.batch_size, model.njoints, model.nfeats, n_frames),
@@ -122,119 +127,18 @@ def main():
                 skip_timesteps=0,  # 0 is the default value - i.e. don't skip any step
                 init_image=None,
                 progress=True,
-                dump_steps=None,
+                dump_steps=dump_steps,
                 noise=None,
                 const_noise=False,
             )
             sample = sample.permute(0, 3, 2, 1).squeeze(2).contiguous().cpu()
           
-            global_mean = torch.from_numpy(np.load('dataset/gazehoi_global_motion_6d_mean.npy'))
-            global_std = torch.from_numpy(np.load('dataset/gazehoi_global_motion_6d_std.npy'))
-            local_mean = torch.from_numpy(np.load('dataset/gazehoi_local_motion_6d_mean.npy'))
-            local_std = torch.from_numpy(np.load('dataset/gazehoi_local_motion_6d_std.npy'))
+            
             
             sample = sample * local_std + local_mean 
             sample = local2global_rot6d_by_matrix(sample)
             sample = rot6d2axis(sample)
-            if args.dataset.startswith('gazehoi_stage1'):
-                hint = model_kwargs['y']['hint'].cpu()
-                hint = hint * global_std + global_mean
-                hint = rot6d2axis(hint)
-                all_hint.append(hint.data.cpu().numpy())  
-        elif args.dataset=='gazehoi_stage0_flag2_lowfps_global':
-            obj_global_mean = torch.from_numpy(np.load('dataset/gazehoi_global_obj_mean.npy')).reshape(1,-1).repeat(4,1).reshape(1,-1)
-            obj_global_std = torch.from_numpy(np.load('dataset/gazehoi_global_obj_std.npy')).reshape(1,-1).repeat(4,1).reshape(1,-1)
-            gt = model_kwargs['y']['gt']
-            gt_flag = model_kwargs['y']['flag']
-            bs = gt.shape[0]
-            nf = gt.shape[2]
-            # print(gt.shape)
-            gt = gt.permute(0,2,1,3).contiguous().reshape(bs,nf,-1).cpu()
-            gt = gt * obj_global_std + obj_global_mean  
-            gt = obj_rot6d2matrix(gt)
-            all_gt.append(gt.numpy())
-            sample,flag = sample_fn(
-                model,
-                (args.batch_size, model.njoints, model.nfeats, n_frames),
-                clip_denoised=False,
-                model_kwargs=model_kwargs,
-                skip_timesteps=0,  # 0 is the default value - i.e. don't skip any step
-                init_image=None,
-                progress=True,
-                dump_steps=None,
-                noise=None,
-                const_noise=False,
-            )
-            sample = sample.permute(0, 3, 2, 1).squeeze(2).contiguous().cpu()
-            
-            sample = sample * obj_global_std + obj_global_mean  # bs, nf, 36
-            # sample = obj_local2global_matrix(sample)
-            sample = obj_rot6d2matrix(sample)
-
-            active_flag = flag[0]
-            move_flag = flag[1]
-            print(active_flag.shape, move_flag.shape)
-            logsoftmax = nn.LogSoftmax()
-            active_flag = logsoftmax(active_flag)
-            move_flag = logsoftmax(move_flag)
-            # print(active_flag,move_flag)
-            print(torch.argmax(active_flag,dim=-1),torch.argmax(move_flag,dim=-1))
-
-            all_active_flag.append(torch.argmax(active_flag,dim=-1).cpu().numpy())
-            all_move_flag.append(torch.argmax(move_flag,dim=-1).cpu().numpy())
-            all_flag.append(gt_flag.cpu().numpy())
-            
-
-            # 处理flag ([81, 345, 4])
-            # pred_move = torch.sum(flag,dim=1) # #b,4
-            # obj_index = torch.argmax(pred_move,dim=-1)
-            # all_obj_index.append(obj_index)
-            # flag = flag.permute(0,2,1)
-            # active_flag = flag[torch.arange(bs),obj_index] # b,nf
-            # all_obj_activeflag.append(active_flag)
-            # all_obj_activeflag.append(flag.cpu().numpy())
-            # tgt_obj = obj_mesh[torch.arange(bs),obj_index]
-        elif args.dataset.startswith('gazehoi_stage0_flag'):
-            sample,flag = sample_fn(
-                model,
-                (args.batch_size, model.njoints, model.nfeats, n_frames),
-                clip_denoised=False,
-                model_kwargs=model_kwargs,
-                skip_timesteps=0,  # 0 is the default value - i.e. don't skip any step
-                init_image=None,
-                progress=True,
-                dump_steps=None,
-                noise=None,
-                const_noise=False,
-            )
-            sample = sample.permute(0, 3, 2, 1).squeeze(2).contiguous().cpu()
-            obj_global_mean = torch.from_numpy(np.load('dataset/gazehoi_global_obj_mean.npy')).reshape(1,-1).repeat(4,1).reshape(1,-1)
-            obj_global_std = torch.from_numpy(np.load('dataset/gazehoi_global_obj_std.npy')).reshape(1,-1).repeat(4,1).reshape(1,-1)
-            obj_local_mean = torch.from_numpy(np.load('dataset/gazehoi_local_obj_mean.npy')).reshape(1,-1).repeat(4,1).reshape(1,-1)
-            obj_local_std = torch.from_numpy(np.load('dataset/gazehoi_local_obj_std.npy')).reshape(1,-1).repeat(4,1).reshape(1,-1)
-            sample = sample * obj_local_std + obj_local_mean  # bs, nf, 36
-            sample = obj_local2global_matrix(sample)
-
-
-            # 处理flag ([81, 345, 4])
-            pred_move = torch.sum(flag,dim=1) # #b,4
-            obj_index = torch.argmax(pred_move,dim=-1)
-            all_obj_index.append(obj_index)
-            flag = flag.permute(0,2,1)
-            # active_flag = flag[torch.arange(bs),obj_index] # b,nf
-            # all_obj_activeflag.append(active_flag)
-            all_obj_activeflag.append(flag.cpu().numpy())
-            # tgt_obj = obj_mesh[torch.arange(bs),obj_index]
-        else:
-
-            obj_global_mean = torch.from_numpy(np.load('dataset/gazehoi_global_obj_mean.npy')).reshape(1,-1).repeat(4,1).reshape(1,-1)
-            obj_global_std = torch.from_numpy(np.load('dataset/gazehoi_global_obj_std.npy')).reshape(1,-1).repeat(4,1).reshape(1,-1)
-            obj_local_mean = torch.from_numpy(np.load('dataset/gazehoi_local_obj_mean.npy')).reshape(1,-1).repeat(4,1).reshape(1,-1)
-            obj_local_std = torch.from_numpy(np.load('dataset/gazehoi_local_obj_std.npy')).reshape(1,-1).repeat(4,1).reshape(1,-1)
-            # sample = sample * obj_global_std + obj_local_mean  # bs, nf, 36
-            sample = sample * obj_local_std + obj_local_mean  # bs, nf, 36
-            sample = obj_local2global_matrix(sample)
-
+             
 
         all_seqs.append(model_kwargs['y']['seq_name'])
 
@@ -248,14 +152,8 @@ def main():
     print(total_num_samples)
     all_motions = all_motions[:total_num_samples]  # [bs, njoints, 6, seqlen]
     all_seqs =  [element for sublist in all_seqs for element in sublist]
-    # all_lengths = np.concatenate(all_lengths, axis=0)[:total_num_samples]
     if args.dataset.startswith('gazehoi_stage1'):
         all_hint = np.concatenate(all_hint, axis=0)[:total_num_samples]
-    elif args.dataset.startswith("gazehoi_stage0_flag2_lowfps_global"):
-        all_gt = np.concatenate(all_gt,axis=0)
-        all_flag = np.concatenate(all_flag,axis=0)
-        all_active_flag = np.concatenate(all_active_flag,axis=0)
-        all_move_flag = np.concatenate(all_move_flag,axis=0)
         
     if os.path.exists(out_path):
         shutil.rmtree(out_path)
@@ -267,58 +165,16 @@ def main():
         np.save(npy_path,
                 {'motion': all_motions, 'lengths': all_lengths, "hint": all_hint, 'seqs':all_seqs,
                 'num_samples': args.num_samples, 'num_repetitions': args.num_repetitions})
-    elif args.dataset == 'gazehoi_stage2' or args.dataset=='gazehoi_stage0':
-        np.save(npy_path,
-                {'motion': all_motions, 'lengths': all_lengths, 'seqs':all_seqs,
-                'num_samples': args.num_samples, 'num_repetitions': args.num_repetitions})
-    elif args.dataset=="gazehoi_stage0_flag2_lowfps_global":
-        np.save(npy_path,
-                {'motion': all_motions, 'lengths': all_lengths, 'seqs':all_seqs,
-                'num_samples': args.num_samples, 'num_repetitions': args.num_repetitions,
-                "obj_index":all_obj_index,'flag':all_obj_activeflag,'all_gt':all_gt,
-                'all_flag':all_flag, 'all_active_flag':all_active_flag, 'all_move_flag':all_move_flag})
-
-    elif args.dataset.startswith("gazehoi_stage0_flag"):
-        np.save(npy_path,
-                {'motion': all_motions, 'lengths': all_lengths, 'seqs':all_seqs,
-                'num_samples': args.num_samples, 'num_repetitions': args.num_repetitions,
-                "obj_index":all_obj_index,'flag':all_obj_activeflag})
-        
-    # if len(all_hint) != 0:
-    #     from utils.simple_eval import simple_eval
-    #     results = simple_eval(all_motions, all_hint, n_joints)
-    #     print(results)
     res_save_path = join(out_path, 'eval_results.txt')
-    # all_motions = torch.tensor(all_motions)
-    # all_hint = torch.tensor(all_hint)
-    stage1_eval(all_motions, all_hint, all_seqs, res_save_path)
-    # vis_gen(all_motions,all_seqs,res_save_path,vis_num)
-
+    stage1_eval(all_motions, all_seqs, res_save_path)
     abs_path = os.path.abspath(out_path)
     print(f'[Done] Results are at [{abs_path}]')
 
-def cal_goal_err(x, hint):
-    """
-    x (bs,nf,99)
-    只计算goal pose 的 error
-    不算 init pose
-    """
-    hint[:,0] = 0
-    mask_hint = hint.view(hint.shape[0], hint.shape[1], -1).sum(dim=-1, keepdim=True) != 0
-    loss = torch.sum(torch.norm((x - hint) * mask_hint, dim=-1))
-    loss = torch.mean(loss)
-    return loss
-
-def stage1_eval(pred_motion, seqs, hint, res_save_path):
-    pred_motion = torch.tensor(pred_motion):
-    hint = torch.tensor(hint)
-    
-    goal_err = cal_goal_err(pred_motion,hint)
-
+def stage1_eval(pred_motion, seqs,res_save_path):
+    pred_motion = torch.tensor(pred_motion)
     num_samples = pred_motion.shape[0]
 
-
-    datapath = '/root/code/seqs/1205_data/'
+    datapath = '/root/code/seqs/0303_data/'
     manolayer = ManoLayer(mano_assets_root='/root/code/CAMS/data/mano_assets/mano',side='right')
     obj_path = '/root/code/seqs/object/'
 
@@ -329,6 +185,7 @@ def stage1_eval(pred_motion, seqs, hint, res_save_path):
     total_traj_invalid_20 = 0
     total_traj_num = 0
     total_hand_R_error = 0
+    total_goal_mpjpe = 0
 
     for i in range(num_samples):
         seq = seqs[i]
@@ -347,9 +204,12 @@ def stage1_eval(pred_motion, seqs, hint, res_save_path):
         if goal_index < 59:
             hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[:goal_index]
             pred_motion_i = pred_motion[i,:goal_index]
+
         else:
             hand_params = torch.tensor(np.load(join(seq_path,'mano/poses_right.npy')))[goal_index-60:goal_index]
             pred_motion_i = pred_motion[i]
+        
+
 
         hand_trans = hand_params[:,:3]
         hand_rot = hand_params[:,3:6]
@@ -360,12 +220,15 @@ def stage1_eval(pred_motion, seqs, hint, res_save_path):
         pred_rot = pred_motion_i[:,3:6]
         pred_theta = pred_motion_i[:,3:51]
 
-        # print(goal_index,pred_theta.shape, mano_beta.shape)
+
         pred_output = manolayer(pred_theta, mano_beta)
         pred_joints = pred_output.joints - pred_output.joints[:, 0].unsqueeze(1)
 
         gt_output = manolayer(hand_theta, mano_beta)
         gt_joints = gt_output.joints - gt_output.joints[:, 0].unsqueeze(1)
+
+        goal_mpjpe = torch.mean(torch.norm((gt_joints[-1] - pred_joints[-1]),dim=-1))
+        total_goal_mpjpe += goal_mpjpe
 
         mpjpe = torch.sum(torch.norm(pred_joints - gt_joints, dim=-1)) / (hand_trans.shape[0] * 21)
         total_mpjpe += mpjpe
@@ -387,14 +250,14 @@ def stage1_eval(pred_motion, seqs, hint, res_save_path):
         total_traj_invalid_20 += traj_invalid_20
         total_traj_num += traj_error.shape[0]
     
-    goal_err = goal_err.numpy()
     traj_err_10 = (total_traj_invalid_10/total_traj_num).numpy()
     traj_err_20 = (total_traj_invalid_20/total_traj_num).numpy()
     hand_T_err = (total_hand_T_error/num_samples).numpy()
     hand_R_err = (total_hand_R_error/num_samples).numpy()
     mpjpe = (total_mpjpe/num_samples).numpy()
+    goal_mpjpe = (total_goal_mpjpe/num_samples).numpy()
     with open(res_save_path, 'w') as f:
-        f.write(f'Goal Error:{goal_err:.6f}\n')
+        f.write(f'Goal MPJPE:{goal_mpjpe:.6f}\n')
         f.write(f'Traj Error (>10cm):{traj_err_10:.6f}\n')
         f.write(f'Traj Error (>20cm):{traj_err_20:.6f}\n')
         f.write(f'Hand Trans Error:{hand_T_err:.6f}\n')
@@ -413,7 +276,9 @@ def load_dataset(args, max_frames, n_frames):
     data = get_dataset_loader(name=args.dataset,
                               batch_size=args.batch_size,
                               num_frames=max_frames,
-                              split='test',
+                              split='val_random',
+                            #   split='val_gaze',
+                              # split='test',
                               hml_mode='train',hint_type=args.hint_type)
     if args.dataset in ['kit', 'humanml']:
         data.dataset.t2m_dataset.fixed_length = n_frames
